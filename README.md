@@ -1,5 +1,5 @@
 # SecTools
-### Usage
+### Usage:
 ```
 wget -q https://github.com/0xstaark/SecTools/raw/main/sectools.sh
 chmod +x sectools.sh
