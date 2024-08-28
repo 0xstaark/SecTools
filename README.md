@@ -1,7 +1,6 @@
 # SecTools
 ### Usage
 ```
-cd /tmp
 wget -q https://github.com/0xstaark/SecTools/raw/main/sectools.sh
 chmod +x sectools.sh
 ./sectools.sh
