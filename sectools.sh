@@ -161,16 +161,6 @@ else
 fi
 
 
-#Installing Terminator
-#if [[ $(which terminator) == '/usr/bin/terminator' ]]; then
-#	printf "${GREEN}[OK]${GREEN} %-15s %s\n" "Terminator" "Already installed"
-#
-#else
-#	printf "${YELLOW}[INFO]${YELLOW} %-15s %s\n" "Installing" "Terminator"
-#	sudo apt-get -qq -y install terminator >/dev/null 2>&1
-#fi
-
-
 # Intalling batcat
 if [[ $(which batcat) == '/usr/bin/batcat' ]]; then
 	printf "${GREEN}[OK]${GREEN} %-15s %s\n" "Batcat" "Already installed"
@@ -272,17 +262,6 @@ else
 	sudo python3 -m pip install -q certipy-ad 2>/dev/null
 fi
 
-#Installing NetExec
-#if [[ $(which netexec) == '/root/.local/bin/netexec' || $(which nxc) == '/root/.local/bin/nxc' || $(which netexec) == '/usr/bin/netexec' || $(which nxc) == '/usr/bin/nxc' ]]; then
-#	printf "${GREEN}[OK]${GREEN} %-15s %s\n" "NetExec" "Already installed"
-#
-#else
-#	printf "${YELLOW}[INFO]${YELLOW} %-15s %s\n" "Installing" "NetExec"
-#	echo -e "${YELLOW} This my take a while${NC}"
-#	sudo apt-get -q install -y pipx 2>/dev/null 2>&1
-#	pipx --quiet ensurepath 2>/dev/null 2>&1
-#	pipx --quiet install git+https://github.com/Pennyw0rth/NetExec 2>/dev/null
-#fi
 
 #Installing pypykatz
 if [[ $(which pypykatz) == '/usr/local/bin/pypykatz' || $(which pypykatz) == '/usr/bin/pypykatz' ]]; then
