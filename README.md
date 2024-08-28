@@ -1,7 +1,7 @@
 # SecTools
 
-### The following tools and scripts are downloaded:
-
+### Downloads the following tools and scripts:
+## Tools
 * seclists
 * Batcat
 * Rustscan
@@ -15,6 +15,7 @@
 * Certipy-ad
 * pypykatz
 
+## Scripts
 * mimikatz.exe
 * SharpHound.exe
 * winPEASx64.exe
