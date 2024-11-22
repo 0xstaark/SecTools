@@ -8,7 +8,7 @@ sudo ./sectools.sh
 Custom webserver
 ```
 Usage:
-servtools 8000
+servtools <Port>
 
 Can use the option --obf to start the server in the obfuscated folder
 ```
