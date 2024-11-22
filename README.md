@@ -5,14 +5,12 @@ wget -q https://github.com/0xstaark/SecTools/raw/main/sectools.sh
 chmod +x sectools.sh
 sudo ./sectools.sh
 ```
-```
 ##Custom webserver
-#Usage:
+```
+Usage:
 servtools 8000
 
 Can use the option --obf to start the server in the obfuscated folder
-
-servtools 8000 --obf
 ```
 
 ### Adds function to the users .zshrc file
