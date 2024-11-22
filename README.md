@@ -7,8 +7,11 @@ sudo ./sectools.sh
 ```
 ```
 ##Custom webserver
+#Usage:
 servtools 8000
+
 Can use the option --obf to server the scripts on the obfuscated folder
+
 servtools 8000 --obf
 ```
 
