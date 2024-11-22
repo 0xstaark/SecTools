@@ -6,6 +6,11 @@ chmod +x sectools.sh
 sudo ./sectools.sh
 ```
 ### Downloads the following tools and scripts:
+### Adds function to the users .zshrc file
+* Custom HTTP server to start serter from the directory the scripts are downloaded to.
+* Adds alias for batcat.
+* Adds function to extract ports in a comma-seperated list from tools like Rustscan.
+
 ## Tools
 * seclists
 * Batcat
