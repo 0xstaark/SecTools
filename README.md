@@ -5,9 +5,15 @@ wget -q https://github.com/0xstaark/SecTools/raw/main/sectools.sh
 chmod +x sectools.sh
 sudo ./sectools.sh
 ```
+```
+##Custom webserver
+servtools 8000
+Can use the option --obf to server the scripts on the obfuscated folder
+servtools 8000 --obf
+```
 
 ### Adds function to the users .zshrc file
-* Custom HTTP server to start server from the directory the scripts are downloaded to.
+* Custom HTTP server to start server from the directory the scripts are downloaded to. 
 * Adds alias for batcat.
 * Adds function to extract ports in a comma-seperated list from tools like Rustscan.
 
