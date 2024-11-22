@@ -3,7 +3,7 @@
 ```
 wget -q https://github.com/0xstaark/SecTools/raw/main/sectools.sh
 chmod +x sectools.sh
-./sectools.sh
+sudo ./sectools.sh
 ```
 ### Downloads the following tools and scripts:
 ## Tools
@@ -61,3 +61,7 @@ chmod +x sectools.sh
 * passthecert.py
 * PetitPotam.py
 * SprayingToolkit
+* Certify.exe
+* Inveigh.exe
+* RunasCs.exe
+* Invoke-RunasCs.ps1
