@@ -5,7 +5,7 @@ wget -q https://github.com/0xstaark/SecTools/raw/main/sectools.sh
 chmod +x sectools.sh
 sudo ./sectools.sh
 ```
-##Custom webserver
+Custom webserver
 ```
 Usage:
 servtools 8000
