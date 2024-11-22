@@ -10,7 +10,7 @@ sudo ./sectools.sh
 #Usage:
 servtools 8000
 
-Can use the option --obf to server the scripts on the obfuscated folder
+Can use the option --obf to start the server in the obfuscated folder
 
 servtools 8000 --obf
 ```
