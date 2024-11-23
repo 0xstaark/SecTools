@@ -1,7 +1,7 @@
 # SecTools
 ### Usage:
 ```
-wget -q https://github.com/0xstaark/SecTools/raw/main/sectools.sh
+wget -q https://github.com/0xstaark/SecTools/raw/refs/heads/main/sectools.sh
 chmod +x sectools.sh
 sudo ./sectools.sh
 ```
