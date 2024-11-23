@@ -635,7 +635,7 @@ single_file_check_and_download_file "$download_url" "$local_file"
 download_url="https://github.com/antonioCoco/RunasCs/releases/download/v1.5/RunasCs.zip"
 local_file="RunasCs.exe"
 single_file_check_and_download_file "$download_url" "$local_file"
-unzip RunasCs.zip
+unzip RunasCs.zip 2>/dev/null
 rm RunasCs.zip 2>/dev/null
 
 
