@@ -32,6 +32,42 @@ echo ""
 
 
 ###################################################################################################################
+# Directory input with autocomplete
+###################################################################################################################
+read_directory() {
+    local prompt="$1"
+    local default="$2"
+    local result=""
+
+    # Enable readline completion for directories
+    if [[ -n "$BASH_VERSION" ]]; then
+        # Save current completion settings
+        local old_complete=$(complete -p -D 2>/dev/null || true)
+
+        # Set up directory completion
+        bind 'set show-all-if-ambiguous on' 2>/dev/null
+        bind 'TAB:complete' 2>/dev/null
+
+        # Use read -e for readline support with tab completion
+        read -e -p "$prompt" result
+
+        # Restore settings
+        bind 'set show-all-if-ambiguous off' 2>/dev/null
+    else
+        # Fallback for non-bash shells
+        read -p "$prompt" result
+    fi
+
+    # Return default if empty
+    if [[ -z "$result" ]]; then
+        echo "$default"
+    else
+        echo "$result"
+    fi
+}
+
+
+###################################################################################################################
 # Check network connection
 ###################################################################################################################
 
@@ -558,14 +594,10 @@ download_scripts() {
 # Tools directory
 toolsdir="/opt/tools"
 
-# Prompt the user for a custom directory
+# Prompt the user for a custom directory with autocomplete
 echo -e "${YELLOW}[INFO]${NC} Choose directory to download Script to. Example: /opt/tools"
-read -p "$(echo -e "${YELLOW}[INFO]${NC} Enter the directory to use, hit ENTER for default: ${YELLOW}[${toolsdir}]${NC}: ")" userdir
-
-# If user provides input, use it as the tools directory
-if [[ -n "$userdir" ]]; then
-    toolsdir="$userdir"
-fi
+echo -e "${YELLOW}[INFO]${NC} ${BLUE}(Tab completion enabled)${NC}"
+toolsdir=$(read_directory "$(echo -e "${YELLOW}[INFO]${NC} Enter directory [${YELLOW}${toolsdir}${NC}]: ")" "$toolsdir")
 
 # Check if directory exists
 if [[ -d "$toolsdir" ]]; then
@@ -826,8 +858,8 @@ obfuscated_scripts() {
     toolsdir="/opt/tools"
 
     echo -e "${YELLOW}[INFO]${NC} Choose download directory. An ${BLUE}[Obfuscated]${NC} folder will be created here"
-    read -p "$(echo -e "${YELLOW}[INFO]${NC} Enter the directory to use, or hit ENTER for default: ${YELLOW}[${toolsdir}]${NC}: ")" userdir
-    [[ -n "$userdir" ]] && toolsdir="$userdir"
+    echo -e "${YELLOW}[INFO]${NC} ${BLUE}(Tab completion enabled)${NC}"
+    toolsdir=$(read_directory "$(echo -e "${YELLOW}[INFO]${NC} Enter directory [${YELLOW}${toolsdir}${NC}]: ")" "$toolsdir")
 
     # Just ensure the directory exists
     if [[ ! -d "$toolsdir" ]]; then
