@@ -563,7 +563,7 @@ install_tool() {
         #"[[ \$(which batcat) == '/usr/bin/batcat' ]]"
 
     install_tool "rustscan" \
-        "deb_url=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep 'browser_download_url.*amd64.deb' | head -1 | awk -F '\"' '{print \$4}'); if [[ -n \"\$deb_url\" ]]; then sudo wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb && rm -f rustscan.deb; else exit 1; fi" \
+        "deb_url=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep 'browser_download_url.*amd64.deb' | head -1 | awk -F '\"' '{print \$4}'); if [[ -n \"\$deb_url\" ]]; then sudo wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb && rm -f rustscan.deb; else false; fi" \
         "[[ -x /usr/bin/rustscan ]] || command -v rustscan &>/dev/null"
 
     install_tool "wfuzz" \
