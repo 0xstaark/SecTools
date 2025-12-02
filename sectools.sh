@@ -381,16 +381,28 @@ local_file2="mimikatz_trunk.zip"
 check_and_download_file "$api_url" "$file" "$local_file" "$local_file2"
 
 
-#Downloading SharpHound.exe
+#Downloading SharpHound.exe (from SpecterOps - new home of SharpHound)
 # GitHub API URL for the latest release
-api_url="https://api.github.com/repos/BloodHoundAD/SharpHound/releases/latest"
-file=$(curl -sL "$api_url" | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | sed 's/"//g')
-#lastest_release=$(echo $latest) | awk -F '/' '{print $1}'
-#zip_file_name=$(echo $latest) | awk -F '/' '{print $2}' | sed 's/"$//'
-#file="https://github.com/BloodHoundAD/SharpHound/releases/download/$lastest_release/$zip_file_name"
-local_file="SharpHound.exe"
-local_file2="$(echo $file | awk -F '/' '{print $9}')"
-check_and_download_file "$api_url" "$file" "$local_file" "$local_file2"
+api_url="https://api.github.com/repos/SpecterOps/SharpHound/releases/latest"
+if [[ ! -f "SharpHound.exe" ]]; then
+    # Get the x64 zip URL (not debug, not sha256)
+    file=$(curl -sL "$api_url" | grep -i 'browser_download_url' | grep -v 'debug' | grep -v 'sha256' | grep 'x86.zip"' | head -1 | awk '{print $2}' | sed 's/"//g')
+    if [[ -n "$file" ]]; then
+        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Downloading:" "SharpHound.exe"
+        wget -q "$file" -O SharpHound_temp.zip 2>/dev/null
+        if [[ -f "SharpHound_temp.zip" ]]; then
+            unzip -o SharpHound_temp.zip -d SharpHound_temp >/dev/null 2>&1
+            cp SharpHound_temp/SharpHound.exe . 2>/dev/null
+            rm -rf SharpHound_temp SharpHound_temp.zip 2>/dev/null
+        else
+            printf "${RED}[WAR]${NC}  %-15s %s\n" "Failed to download:" "SharpHound.exe"
+        fi
+    else
+        printf "${RED}[WAR]${NC}  %-15s %s\n" "Failed to get URL for:" "SharpHound.exe"
+    fi
+else
+    echo -e "${GREEN}[OK]${NC}   File exists: ${YELLOW}SharpHound.exe${NC}"
+fi
 
 
 #Downloading winPEASx64.exe
@@ -736,11 +748,7 @@ single_file_check_and_download_file "$download_url" "$local_file"
         rm -rf mimikatz_temp mimikatz*.zip 2>/dev/null
     fi
 
-    # Extract SharpHound if needed
-    if [[ ! -f "SharpHound.exe" ]] && ls SharpHound*.zip 1>/dev/null 2>&1; then
-        unzip -o SharpHound*.zip >/dev/null 2>&1
-        rm -f SharpHound*.zip 2>/dev/null
-    fi
+    # Note: SharpHound extraction is now handled during download
 
     # Clean up temporary files
     rm -f *.zip *.config *.dll *.pdb *.txt *.chm *.idl *.yar 2>/dev/null
