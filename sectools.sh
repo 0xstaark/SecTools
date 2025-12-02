@@ -32,11 +32,47 @@ echo ""
 
 
 ###################################################################################################################
+# Directory input with autocomplete
+###################################################################################################################
+read_directory() {
+    local prompt="$1"
+    local default="$2"
+    local result=""
+
+    # Enable readline completion for directories
+    if [[ -n "$BASH_VERSION" ]]; then
+        # Save current completion settings
+        local old_complete=$(complete -p -D 2>/dev/null || true)
+
+        # Set up directory completion
+        bind 'set show-all-if-ambiguous on' 2>/dev/null
+        bind 'TAB:complete' 2>/dev/null
+
+        # Use read -e for readline support with tab completion
+        read -e -p "$prompt" result
+
+        # Restore settings
+        bind 'set show-all-if-ambiguous off' 2>/dev/null
+    else
+        # Fallback for non-bash shells
+        read -p "$prompt" result
+    fi
+
+    # Return default if empty
+    if [[ -z "$result" ]]; then
+        echo "$default"
+    else
+        echo "$result"
+    fi
+}
+
+
+###################################################################################################################
 # Check network connection
 ###################################################################################################################
 
 if ! ping -c 1 8.8.8.8 &> /dev/null; then
-    echo ${RED}"[WAR]${NC}  No network connection. Exiting..."${NC}
+    echo -e "${RED}[WAR]${NC} No network connection. Exiting..."
     exit 1
 fi
 
@@ -49,7 +85,7 @@ spinner() {
     local delay=0.1
     local spinstr='|/-\'
     local i=0
-    while kill -0 $pid 2>/dev/null; do
+    while kill -0 "$pid" 2>/dev/null; do
         printf "\r${YELLOW}[INFO]${NC} Downloading   %-31s [%c]" "$1" "${spinstr:i:1}"
         i=$(( (i + 1) % ${#spinstr} ))
         sleep $delay
@@ -64,11 +100,11 @@ spinner() {
 spinner2() {
     local pid=$!  # Get the PID of the last background process
     local delay=0.1
-    local spinstr2='|/-\'
+    local spinstr='|/-\'
     local i=0
-    while kill -0 $pid 2>/dev/null; do
-        printf "\r${BLUE}[INFO]${NC} Cleanup... %-31s [%c]" "${spinstr2:i:1}"
-        i=$(( (i + 1) % ${#spinstr2} ))
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r${BLUE}[INFO]${NC} Cleanup...                                  [%c]" "${spinstr:i:1}"
+        i=$(( (i + 1) % ${#spinstr} ))
         sleep $delay
     done
 }
@@ -80,11 +116,11 @@ spinner2() {
 spinner3() {
     local pid=$!  # Get the PID of the last background process
     local delay=0.1
-    local spinstr3='|/-\'
+    local spinstr='|/-\'
     local i=0
-    while kill -0 $pid 2>/dev/null; do
-        printf "\r${YELLOW}[INFO]${NC} %s                             [%c]" "$1" "${spinstr3:i:1}"
-        i=$(( (i + 1) % ${#spinstr3} ))
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r${YELLOW}[INFO]${NC} %-40s [%c]" "$1" "${spinstr:i:1}"
+        i=$(( (i + 1) % ${#spinstr} ))
         sleep $delay
     done
 }
@@ -98,9 +134,9 @@ spinner4() {
     local delay=0.1
     local spinstr='|/-\'
     local i=0
-    while kill -0 $pid 2>/dev/null; do
-        printf "\r${YELLOW}[INFO]${NC} Installing   %-31s [%c]" "$1" "${spinstr4:i:1}"
-        i=$(( (i + 1) % ${#spinstr4} ))
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r${YELLOW}[INFO]${NC} Installing   %-31s [%c]" "$1" "${spinstr:i:1}"
+        i=$(( (i + 1) % ${#spinstr} ))
         sleep $delay
     done
 }
@@ -199,7 +235,7 @@ ask_upgrade() {
 
 
 ###################################################################################################################
-# Error handeling
+# Error handling
 ###################################################################################################################
 handle_error() {
     local tool_name="$1"
@@ -340,15 +376,34 @@ api_file_check_and_download_file() {
         local temp_zip="temp_download.zip"
         (curl -sL "$file_url" -o "$temp_zip" >/dev/null 2>&1) & spinner "$filename"
 
-        local extracted_file=$(unzip -Z1 "$temp_zip" | grep -i "$filename")
+        # Wait for download to complete
+        wait
+
+        # List zip contents and find the file (handles subdirectories)
+        local extracted_file=$(unzip -Z1 "$temp_zip" 2>/dev/null | grep -i "${filename}$" | head -1)
+
+        # If exact match not found, try partial match
+        if [[ -z "$extracted_file" ]]; then
+            extracted_file=$(unzip -Z1 "$temp_zip" 2>/dev/null | grep -i "$filename" | head -1)
+        fi
+
         if [[ -z "$extracted_file" ]]; then
             printf "\r${YELLOW}[WARNING]${NC} ${filename} not found in ZIP archive.\n"
             rm -f "$temp_zip"
             return
         fi
 
-        unzip -jo "$temp_zip" "$extracted_file" >/dev/null 2>&1
-        mv "$extracted_file" "$filename" 2>/dev/null || true
+        # Extract file (junk paths to flatten directory structure)
+        unzip -jo "$temp_zip" "$extracted_file" -d . >/dev/null 2>&1
+
+        # Get the basename in case file was in a subdirectory
+        local extracted_basename=$(basename "$extracted_file")
+
+        # Rename to target filename if different
+        if [[ "$extracted_basename" != "$filename" && -f "$extracted_basename" ]]; then
+            mv "$extracted_basename" "$filename" 2>/dev/null || true
+        fi
+
         rm -f "$temp_zip"
 
     else
@@ -421,7 +476,7 @@ download_obfuscated_scripts() {
 ###################################################################################################################
 # Tools install function
 ###################################################################################################################
-#Fuction for Installing tools, and then calling the function via the menu
+# Function for installing tools, and then calling the function via the menu
 install_tools() {
     # Check if user is NOT root
     if [[ $UID -ne 0 ]]; then
@@ -430,9 +485,9 @@ install_tools() {
         sudo -v || exit 1
     fi
 
-    echo -e "${GREEN}-------------------------------------------------------"
-    echo -e "${GREEN}[INFO] Installing tools"
-    echo -e "${GREEN}-------------------------------------------------------"
+    echo -e "${GREEN}-------------------------------------------------------${NC}"
+    echo -e "${GREEN}[INFO] Installing tools${NC}"
+    echo -e "${GREEN}-------------------------------------------------------${NC}"
 
     # Function to handle tool installation with spinner
 install_tool() {
@@ -490,8 +545,8 @@ install_tool() {
         #"[[ \$(which batcat) == '/usr/bin/batcat' ]]"
 
     install_tool "rustscan" \
-        "versionnr=\$(curl -s https://api.github.com/repos/RustScan/RustScan/releases | grep 'browser_download_url' | head -1 | tr -d ' ' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'); sudo wget -q -O rustscan.deb https://github.com/RustScan/RustScan/releases/download/\${versionnr}/rustscan_\${versionnr}_amd64.deb && sudo dpkg -i rustscan.deb && rm rustscan.deb" \
-        "[[ \$(which rustscan) == '/usr/bin/rustscan' ]]"
+        "deb_url=\$(curl -s https://api.github.com/repos/RustScan/RustScan/releases/latest | grep 'browser_download_url.*amd64.deb' | head -1 | awk -F '\"' '{print \$4}'); if [[ -n \"\$deb_url\" ]]; then sudo wget -q -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb && rm -f rustscan.deb; else echo 'Failed to get RustScan URL' && exit 1; fi" \
+        "[[ -x /usr/bin/rustscan ]] || command -v rustscan &>/dev/null"
 
     install_tool "wfuzz" \
         "sudo apt-get -qq -y install wfuzz" \
@@ -522,7 +577,7 @@ install_tool() {
         "[[ \$(which certipy-ad) == '/usr/local/bin/certipy-ad' || \$(which certipy-ad) == '/usr/bin/certipy-ad' ]]"
 
     install_tool "pypykatz" \
-        "sudo pip3 install -qqq pypykatz" \
+        "sudo python3 -m pip install -qqq pypykatz" \
         "[[ \$(which pypykatz) == '/usr/local/bin/pypykatz' || \$(which pypykatz) == '/usr/bin/pypykatz' ]]"
 
     install_tool "sublime-text" \
@@ -549,23 +604,19 @@ install_tool() {
 }
 
 ###################################################################################################################
-# DONWLOADING SCRIPTS
+# DOWNLOADING SCRIPTS
 ###################################################################################################################
 
-#Fuction for dowloading scripts, and then calling the function via the menu
+# Function for downloading scripts, and then calling the function via the menu
 download_scripts() {
 
-# Tools direcotry
+# Tools directory
 toolsdir="/opt/tools"
 
-# Prompt the user for a custom directory
+# Prompt the user for a custom directory with autocomplete
 echo -e "${YELLOW}[INFO]${NC} Choose directory to download Script to. Example: /opt/tools"
-read -p "$(echo -e "${YELLOW}[INFO]${NC} Enter the directory to use, hit ENTER for default: ${YELLOW}[${toolsdir}]${NC}: ")" userdir
-
-# If user provides input, use it as the tools directory
-if [[ -n "$userdir" ]]; then
-    toolsdir="$userdir"
-fi
+echo -e "${YELLOW}[INFO]${NC} ${BLUE}(Tab completion enabled)${NC}"
+toolsdir=$(read_directory "$(echo -e "${YELLOW}[INFO]${NC} Enter directory [${YELLOW}${toolsdir}${NC}]: ")" "$toolsdir")
 
 # Check if directory exists
 if [[ -d "$toolsdir" ]]; then
@@ -584,9 +635,9 @@ fi
 
 # Change to the tools directory
 cd "$toolsdir"
-echo -e ${GREEN}"-------------------------------------------------------"
-echo -e ${GREEN}"[INFO] Downloading Scripts to ${BLUE}[${toolsdir}]"
-echo -e ${GREEN}"-------------------------------------------------------"
+echo -e "${GREEN}-------------------------------------------------------"
+echo -e "${GREEN}[INFO] Downloading Scripts to ${BLUE}[${toolsdir}]${NC}"
+echo -e "${GREEN}-------------------------------------------------------${NC}"
 sleep 1
 
 
@@ -734,11 +785,11 @@ single_file_check_and_download_file "https://github.com/leoloobeek/LAPSToolkit/r
 
 
 #Downloading Certify.exe
-single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/blob/master/NetFramework_4.5_Any/Certify.exe" "Certify.exe"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.5_Any/Certify.exe" "Certify.exe"
 
 
 #Downloading Inveigh.exe
-single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/blob/master/NetFramework_4.5_Any/Inveigh.exe" "Inveigh.exe"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.5_Any/Inveigh.exe" "Inveigh.exe"
 
 
 #Downloading Invoke-RunasCs.ps1
@@ -746,7 +797,7 @@ single_file_check_and_download_file "https://github.com/antonioCoco/RunasCs/raw/
 
 
 #Downloading Snaffler.exe
-single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/blob/master/NetFramework_4.7_Any/Snaffler.exe" "Snaffler.exe"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/Snaffler.exe" "Snaffler.exe"
 
 
 
@@ -777,19 +828,38 @@ git_download "https://github.com/dirkjanm/BloodHound.py.git" "bloodhound.py"
 #Downloading Microsoft sysinternal PSTools
 folder_zip_download "https://download.sysinternals.com/files/PSTools.zip" "PSTools.zip" "PSTools"
 
-#Downloading Mimikatz
-folder_zip_download "https://github.com/gentilkiwi/mimikatz/releases/download/2.2.0-20220919/mimikatz_trunk.zip" "mimikatz_trunk.zip" "mimikatz"
+#Downloading Mimikatz (latest version)
+mimikatz_url=$(curl -s "https://api.github.com/repos/gentilkiwi/mimikatz/releases/latest" | grep "browser_download_url.*mimikatz_trunk.zip" | head -1 | awk -F '"' '{print $4}')
+if [[ -n "$mimikatz_url" ]]; then
+    folder_zip_download "$mimikatz_url" "mimikatz_trunk.zip" "mimikatz"
+else
+    printf "${YELLOW}[WARNING]${NC} Could not fetch latest mimikatz version, using fallback\n"
+    folder_zip_download "https://github.com/gentilkiwi/mimikatz/releases/download/2.2.0-20220919/mimikatz_trunk.zip" "mimikatz_trunk.zip" "mimikatz"
+fi
 
 
 #####################################################################################################################
 # ZIP or gz single file Download
 #####################################################################################################################
 
-#Downloading RunasCs.exe
-single_file_zip_gz "https://github.com/antonioCoco/RunasCs/releases/download/v1.5/RunasCs.zip" "RunasCS.zip"
+#Downloading RunasCs.exe (latest version)
+runascs_url=$(curl -s "https://api.github.com/repos/antonioCoco/RunasCs/releases/latest" | grep "browser_download_url.*RunasCs.zip" | head -1 | awk -F '"' '{print $4}')
+if [[ -n "$runascs_url" ]]; then
+    single_file_zip_gz "$runascs_url" "RunasCS.zip"
+else
+    printf "${YELLOW}[WARNING]${NC} Could not fetch latest RunasCs version, using fallback\n"
+    single_file_zip_gz "https://github.com/antonioCoco/RunasCs/releases/download/v1.5/RunasCs.zip" "RunasCS.zip"
+fi
 
-#Downloading chisel
-single_file_zip_gz "https://github.com/jpillora/chisel/releases/download/v1.10.1/chisel_1.10.1_linux_amd64.gz" "chisel_1.10.1_linux_amd64.gz"
+#Downloading chisel (latest version)
+chisel_url=$(curl -s "https://api.github.com/repos/jpillora/chisel/releases/latest" | grep "browser_download_url.*linux_amd64.gz" | head -1 | awk -F '"' '{print $4}')
+chisel_filename=$(basename "$chisel_url" 2>/dev/null)
+if [[ -n "$chisel_url" && -n "$chisel_filename" ]]; then
+    single_file_zip_gz "$chisel_url" "$chisel_filename"
+else
+    printf "${YELLOW}[WARNING]${NC} Could not fetch latest chisel version, using fallback\n"
+    single_file_zip_gz "https://github.com/jpillora/chisel/releases/download/v1.10.1/chisel_1.10.1_linux_amd64.gz" "chisel_1.10.1_linux_amd64.gz"
+fi
 
 
 
@@ -807,8 +877,8 @@ obfuscated_scripts() {
     toolsdir="/opt/tools"
 
     echo -e "${YELLOW}[INFO]${NC} Choose download directory. An ${BLUE}[Obfuscated]${NC} folder will be created here"
-    read -p "$(echo -e "${YELLOW}[INFO]${NC} Enter the directory to use, or hit ENTER for default: ${YELLOW}[${toolsdir}]${NC}: ")" userdir
-    [[ -n "$userdir" ]] && toolsdir="$userdir"
+    echo -e "${YELLOW}[INFO]${NC} ${BLUE}(Tab completion enabled)${NC}"
+    toolsdir=$(read_directory "$(echo -e "${YELLOW}[INFO]${NC} Enter directory [${YELLOW}${toolsdir}${NC}]: ")" "$toolsdir")
 
     # Just ensure the directory exists
     if [[ ! -d "$toolsdir" ]]; then
@@ -874,22 +944,22 @@ download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/Obfuscat
 download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/ADCollector.exe._obf.exe" "ADCollector.exe._obf.exe"
 
 echo ""
-echo -e ${BLUE}"[COMPLETE]"${NC}
+echo -e "${BLUE}[COMPLETE]${NC} Obfuscated scripts downloaded successfully!"
 echo ""
 
 }
 
 
 ###################################################################################################################
-#Function for instaling custom websever from the tools directory and adding a simple function for extracting ports
-# from rustscan output. adding alias for batcat
+# Function for installing custom webserver from the tools directory and adding a simple function for extracting ports
+# from rustscan output
 ###################################################################################################################
 add_custom_functions() {
     echo -e "${YELLOW}[INFO]${NC} Adding functions to the .zshrc file"
     echo ""
     # Custom HTTP server from the tools directory
     # Adding custom server to server tools to ~/.bashrc
-    if [[ $(cat "$zshrc_file" | grep -o 'servtools()') == 'servtools()' ]]; then
+    if grep -q 'servtools()' "$zshrc_file" 2>/dev/null; then
         echo -e "${GREEN}[OK]${NC} servtools already installed"
         echo -e "${YELLOW}[INFO]${NC} To use this server, reopen terminal and type ${BLUE}servtools <port>"
         echo ""
@@ -941,7 +1011,7 @@ add_custom_functions() {
     #fi
 
 # Add Function to extract ports as a comma-separated list
-    if [[ $(grep -o 'extract_ports()' "$zshrc_file") == 'extract_ports()' ]]; then
+    if grep -q 'extract_ports()' "$zshrc_file" 2>/dev/null; then
         echo -e "${GREEN}[OK]${NC} Function to extract ports is already installed"
         echo -e "${YELLOW}[INFO]${NC} To use it, reopen terminal and type ${BLUE}extract_ports <file.txt>${NC}"
     else
@@ -950,11 +1020,11 @@ add_custom_functions() {
         echo -e "${YELLOW}[INFO]${NC} Adding the function extract_ports to ${zshrc_file}"
         echo "# Function to extract ports as a comma-separated list" >> "$zshrc_file" 2>/dev/null
         echo "extract_ports() {" >> "$zshrc_file" 2>/dev/null
-        echo '    if [[ -z "\$1" ]]; then' >> "$zshrc_file" 2>/dev/null
+        echo '    if [[ -z "$1" ]]; then' >> "$zshrc_file" 2>/dev/null
         echo '        echo "Usage: extract_ports <filename>"' >> "$zshrc_file" 2>/dev/null
         echo '        return 1' >> "$zshrc_file" 2>/dev/null
         echo '    fi' >> "$zshrc_file" 2>/dev/null
-        echo "    awk '{print \$1}' \"\$1\" | grep -o '^[0-9]*' | paste -sd," >> "$zshrc_file" 2>/dev/null
+        echo '    awk '"'"'{print $1}'"'"' "$1" | grep -o '"'"'^[0-9]*'"'"' | paste -sd,' >> "$zshrc_file" 2>/dev/null
         echo "}" >> "$zshrc_file" 2>/dev/null
         echo "" >> "$zshrc_file" 2>/dev/null
         echo -e "${YELLOW}[INFO]${NC} Function extract_ports added successfully. Reopen the terminal to use it."
@@ -999,8 +1069,8 @@ menu_choice() {
             echo -e "${YELLOW}[INFO]${NC} Exiting..."
             exit 0
             ;;
-        *) 
-            echo -e "${RED}[WAR]${NC} Invalid option. Please choose a number between 0-3."
+        *)
+            echo -e "${RED}[WAR]${NC} Invalid option. Please choose a number between 0-5."
             #menu_choice
             ;;
 
