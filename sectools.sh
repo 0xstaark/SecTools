@@ -107,7 +107,7 @@ get_script_dir() {
 get_api_response() {
     local api_url="$1"
     if [[ -z "${api_cache[$api_url]:-}" ]]; then
-        api_cache[$api_url]=$(curl -s "$api_url")
+        api_cache[$api_url]=$(curl -sL "$api_url")
     fi
     echo "${api_cache[$api_url]}"
 }
@@ -184,7 +184,7 @@ single_file_check_and_download_file() {
     if [[ -f "$local_file" ]]; then
         # Get the Last-Modified time from the remote file via HTTP headers
         local remote_time
-        remote_time=$(curl -sI "$download_url" 2>/dev/null | grep -i "last-modified" | sed 's/last-modified: //i' | tr -d '\r')
+        remote_time=$(curl -sIL "$download_url" 2>/dev/null | grep -i "last-modified" | tail -1 | sed 's/last-modified: //i' | tr -d '\r')
 
         if [[ -n "$remote_time" ]]; then
             # Get the time from the local file
@@ -263,7 +263,7 @@ install_tools() {
     else
         printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "Rustscan"
         local versionnr
-        versionnr=$(curl -s https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
+        versionnr=$(curl -sL https://api.github.com/repos/RustScan/RustScan/releases/latest | grep '"tag_name"' | head -1 | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/')
         if [[ -n "$versionnr" ]]; then
             wget -q -O /tmp/rustscan.deb "https://github.com/RustScan/RustScan/releases/download/${versionnr}/rustscan_${versionnr}_amd64.deb" 2>/dev/null
             sudo dpkg -i /tmp/rustscan.deb >/dev/null 2>&1
@@ -372,7 +372,7 @@ download_scripts() {
 #Downloading mimikatz
 # GitHub API URL for the latest release
 api_url="https://api.github.com/repos/gentilkiwi/mimikatz/releases/latest"
-file=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | sed 's/"//g')
+file=$(curl -sL "$api_url" | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | sed 's/"//g')
 #latest_release=$(echo $latest | awk -F '/' '{print $1}')
 #zip_file_name=$(echo $latest | awk -F '/' '{print $2}' )
 #file="https://github.com/gentilkiwi/mimikatz/releases/download/$latest_release/$zip_file_name"
@@ -384,7 +384,7 @@ check_and_download_file "$api_url" "$file" "$local_file" "$local_file2"
 #Downloading SharpHound.exe
 # GitHub API URL for the latest release
 api_url="https://api.github.com/repos/BloodHoundAD/SharpHound/releases/latest"
-file=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | sed 's/"//g')
+file=$(curl -sL "$api_url" | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | sed 's/"//g')
 #lastest_release=$(echo $latest) | awk -F '/' '{print $1}'
 #zip_file_name=$(echo $latest) | awk -F '/' '{print $2}' | sed 's/"$//'
 #file="https://github.com/BloodHoundAD/SharpHound/releases/download/$lastest_release/$zip_file_name"
@@ -396,7 +396,7 @@ check_and_download_file "$api_url" "$file" "$local_file" "$local_file2"
 #Downloading winPEASx64.exe
 # GitHub API URL for the latest release
 api_url="https://api.github.com/repos/peass-ng/PEASS-ng/releases"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | head -1 | awk '{print $2}' | awk -F "/" '{print $8}')
+latest=$(curl -sL "$api_url" | grep -i 'browser_download_url' | head -1 | awk '{print $2}' | awk -F "/" '{print $8}')
 file="https://github.com/peass-ng/PEASS-ng/releases/download/$latest/winPEASx64.exe"
 local_file="winPEASx64.exe"
 check_and_download_file "$api_url" "$file" "$local_file"
@@ -405,7 +405,7 @@ check_and_download_file "$api_url" "$file" "$local_file"
 #Downloading winPEASany.exe
 # GitHub API URL for the latest release
 api_url="https://api.github.com/repos/peass-ng/PEASS-ng/releases"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | head -1 | awk '{print $2}' | awk -F "/" '{print $8}')
+latest=$(curl -sL "$api_url" | grep -i 'browser_download_url' | head -1 | awk '{print $2}' | awk -F "/" '{print $8}')
 file="https://github.com/peass-ng/PEASS-ng/releases/download/$latest/winPEASany.exe"
 local_file="winPEASany.exe"
 check_and_download_file "$api_url" "$file" "$local_file"
@@ -414,7 +414,7 @@ check_and_download_file "$api_url" "$file" "$local_file"
 #Downloading Linpeas.sh
 # GitHub API URL for the latest release
 api_url="https://api.github.com/repos/peass-ng/PEASS-ng/releases"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | head -1 | awk '{print $2}' | awk -F "/" '{print $8}')
+latest=$(curl -sL "$api_url" | grep -i 'browser_download_url' | head -1 | awk '{print $2}' | awk -F "/" '{print $8}')
 file="https://github.com/peass-ng/PEASS-ng/releases/download/$latest/linpeas.sh"
 local_file="linpeas.sh"
 check_and_download_file "$api_url" "$file" "$local_file"
@@ -423,7 +423,7 @@ check_and_download_file "$api_url" "$file" "$local_file"
 #Downloadning pspy32
 # GitHub API URL for the latest release
 api_url="https://api.github.com/repos/DominicBreuker/pspy/releases/latest"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
+latest=$(curl -sL "$api_url" | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
 file="https://github.com/DominicBreuker/pspy/releases/download/$latest/pspy32"
 local_file="pspy32"
 check_and_download_file "$api_url" "$file" "$local_file"
@@ -432,7 +432,7 @@ check_and_download_file "$api_url" "$file" "$local_file"
 #Downloading pspy64
 # GitHub API URL for the latest release
 api_url="https://api.github.com/repos/DominicBreuker/pspy/releases/latest"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
+latest=$(curl -sL "$api_url" | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
 file="https://github.com/DominicBreuker/pspy/releases/download/$latest/pspy64"
 local_file="pspy64"
 check_and_download_file "$api_url" "$file" "$local_file"
@@ -441,7 +441,7 @@ check_and_download_file "$api_url" "$file" "$local_file"
 #Downloading Kerbrute
 # GitHub API URL for the latest release
 api_url="https://api.github.com/repos/ropnop/kerbrute/releases/latest"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
+latest=$(curl -sL "$api_url" | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
 file="https://github.com/ropnop/kerbrute/releases/download/$latest/kerbrute_linux_amd64"
 local_file="kerbrute_linux_amd64"
 check_and_download_file "$api_url" "$file" "$local_file"
@@ -450,7 +450,7 @@ check_and_download_file "$api_url" "$file" "$local_file"
 #Downloading Kerbrute
 # GitHub API URL for the latest release
 api_url="https://api.github.com/repos/ropnop/kerbrute/releases/latest"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
+latest=$(curl -sL "$api_url" | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
 file="https://github.com/ropnop/kerbrute/releases/download/$latest/kerbrute_windows_amd64.exe"
 local_file="kerbrute_windows_amd64.exe"
 check_and_download_file "$api_url" "$file" "$local_file"
@@ -632,7 +632,7 @@ single_file_check_and_download_file "$download_url" "$local_file"
 if [[ ! -f "RunasCs.exe" ]]; then
     printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Downloading:" "RunasCs.exe"
     local runascs_version
-    runascs_version=$(curl -s https://api.github.com/repos/antonioCoco/RunasCs/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
+    runascs_version=$(curl -sL https://api.github.com/repos/antonioCoco/RunasCs/releases/latest | grep '"tag_name"' | head -1 | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/')
     if [[ -n "$runascs_version" ]]; then
         wget -q "https://github.com/antonioCoco/RunasCs/releases/download/${runascs_version}/RunasCs.zip" -O RunasCs.zip 2>/dev/null
         if [[ -f "RunasCs.zip" ]]; then
@@ -956,7 +956,7 @@ SERVTOOLS_EOF2
         echo "        DIR=\"${toolsdir}\"" >> "$zshrc_file" 2>/dev/null
         cat >> "$zshrc_file" 2>/dev/null << 'SERVTOOLS_EOF3'
     fi
-    IP=$(ip -4 addr show tun0 2>/dev/null | grep -oP "(?<=inet ).*(?=/)" || echo "127.0.0.1")
+    IP=$(ip -4 addr show tun0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 || echo "127.0.0.1")
     echo -e "${GREEN}Files in directory ${BLUE}[${DIR}]${NC}"
     ls "${DIR}"
     echo -e "${GREEN}-------------------------------------------------------------------------${NC}"
