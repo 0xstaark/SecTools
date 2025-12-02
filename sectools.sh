@@ -339,8 +339,8 @@ api_file_check_and_download_file() {
     local filename="$2"
     local filter="$3"
 
-    # Get release information from GitHub API (with timeout)
-    local response=$(curl -s --connect-timeout 10 --max-time 30 "$api_url")
+    # Get release information from GitHub API (with timeout, follow redirects)
+    local response=$(curl -sL --connect-timeout 10 --max-time 30 "$api_url")
 
     # Determine if the filename has an extension
     local file_url=""
@@ -563,7 +563,7 @@ install_tool() {
         #"[[ \$(which batcat) == '/usr/bin/batcat' ]]"
 
     install_tool "rustscan" \
-        "deb_url=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep 'browser_download_url.*amd64.deb' | head -1 | awk -F '\"' '{print \$4}'); if [[ -n \"\$deb_url\" ]]; then sudo wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb && rm -f rustscan.deb; else false; fi" \
+        "deb_url=\$(curl -sL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*rustscan[^\"]*\\.deb' | head -1); if [[ -z \"\$deb_url\" ]]; then deb_url=\$(curl -sL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*\\.deb\\.zip' | head -1); fi; if [[ \"\$deb_url\" == *.zip ]]; then sudo wget -q --timeout=60 -O rustscan.deb.zip \"\$deb_url\" && unzip -o rustscan.deb.zip && sudo dpkg -i rustscan*.deb && rm -f rustscan.deb.zip rustscan*.deb; elif [[ -n \"\$deb_url\" ]]; then sudo wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb && rm -f rustscan.deb; else false; fi" \
         "[[ -x /usr/bin/rustscan ]] || command -v rustscan &>/dev/null"
 
     install_tool "wfuzz" \
@@ -847,7 +847,7 @@ git_download "https://github.com/dirkjanm/BloodHound.py.git" "bloodhound.py"
 folder_zip_download "https://download.sysinternals.com/files/PSTools.zip" "PSTools.zip" "PSTools"
 
 #Downloading Mimikatz (latest version)
-mimikatz_url=$(curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/gentilkiwi/mimikatz/releases/latest" | grep "browser_download_url.*mimikatz_trunk.zip" | head -1 | awk -F '"' '{print $4}')
+mimikatz_url=$(curl -sL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/gentilkiwi/mimikatz/releases/latest" | grep "browser_download_url.*mimikatz_trunk.zip" | head -1 | awk -F '"' '{print $4}')
 if [[ -n "$mimikatz_url" ]]; then
     folder_zip_download "$mimikatz_url" "mimikatz_trunk.zip" "mimikatz"
 else
@@ -861,7 +861,7 @@ fi
 #####################################################################################################################
 
 #Downloading RunasCs.exe (latest version)
-runascs_url=$(curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/antonioCoco/RunasCs/releases/latest" | grep "browser_download_url.*RunasCs.zip" | head -1 | awk -F '"' '{print $4}')
+runascs_url=$(curl -sL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/antonioCoco/RunasCs/releases/latest" | grep "browser_download_url.*RunasCs.zip" | head -1 | awk -F '"' '{print $4}')
 if [[ -n "$runascs_url" ]]; then
     single_file_zip_gz "$runascs_url" "RunasCS.zip"
 else
@@ -870,7 +870,7 @@ else
 fi
 
 #Downloading chisel (latest version)
-chisel_url=$(curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/jpillora/chisel/releases/latest" | grep "browser_download_url.*linux_amd64.gz" | head -1 | awk -F '"' '{print $4}')
+chisel_url=$(curl -sL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/jpillora/chisel/releases/latest" | grep "browser_download_url.*linux_amd64.gz" | head -1 | awk -F '"' '{print $4}')
 chisel_filename=$(basename "$chisel_url" 2>/dev/null)
 if [[ -n "$chisel_url" && -n "$chisel_filename" ]]; then
     single_file_zip_gz "$chisel_url" "$chisel_filename"
