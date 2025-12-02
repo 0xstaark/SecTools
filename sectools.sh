@@ -285,8 +285,8 @@ folder_zip_download() {
         rm -rf "$extract_dir" "$zip_name"
     fi
 
-    # Download the zip file
-    (curl -sL "$zip_url" -o "$zip_name" >/dev/null 2>&1) & spinner "$extract_dir"
+    # Download the zip file (with timeout)
+    (curl -sL --connect-timeout 10 --max-time 120 "$zip_url" -o "$zip_name" >/dev/null 2>&1) & spinner "$extract_dir"
 
     # Extract the zip file into the specified directory
     unzip -qo "$zip_name" -d "$extract_dir" >/dev/null 2>&1
@@ -308,8 +308,8 @@ single_file_zip_gz() {
         rm -f "$file_name"
     fi
 
-    # Download the archive file
-    (curl -sL "$file_url" -o "$file_name" >/dev/null 2>&1) & spinner "$file_name"
+    # Download the archive file (with timeout)
+    (curl -sL --connect-timeout 10 --max-time 120 "$file_url" -o "$file_name" >/dev/null 2>&1) & spinner "$file_name"
 
     # Determine file type and extract accordingly
     if [[ "$file_name" == *.gz ]]; then
@@ -339,8 +339,8 @@ api_file_check_and_download_file() {
     local filename="$2"
     local filter="$3"
 
-    # Get release information from GitHub API
-    local response=$(curl -s "$api_url")
+    # Get release information from GitHub API (with timeout)
+    local response=$(curl -s --connect-timeout 10 --max-time 30 "$api_url")
 
     # Determine if the filename has an extension
     local file_url=""
@@ -374,7 +374,7 @@ api_file_check_and_download_file() {
     # Download with spinner (Direct or ZIP)
     if [[ "$file_url" == *.zip ]]; then
         local temp_zip="temp_download.zip"
-        (curl -sL "$file_url" -o "$temp_zip" >/dev/null 2>&1) & spinner "$filename"
+        (curl -sL --connect-timeout 10 --max-time 120 "$file_url" -o "$temp_zip" >/dev/null 2>&1) & spinner "$filename"
 
         # Wait for download to complete
         wait
@@ -407,7 +407,7 @@ api_file_check_and_download_file() {
         rm -f "$temp_zip"
 
     else
-        (curl -sL "$file_url" -o "$filename" >/dev/null 2>&1) & spinner "$filename"
+        (curl -sL --connect-timeout 10 --max-time 120 "$file_url" -o "$filename" >/dev/null 2>&1) & spinner "$filename"
     fi
 }
 
@@ -419,8 +419,8 @@ single_file_check_and_download_file() {
     local download_url="$1"
     local local_file="$2"
 
-    # Fetch the `Last-Modified` timestamp from the remote file
-    local remote_time=$(curl -sI "$download_url" | grep -i "Last-Modified" | cut -d: -f2- | xargs -I{} date -d {} +%s 2>/dev/null)
+    # Fetch the `Last-Modified` timestamp from the remote file (with timeout)
+    local remote_time=$(curl -sI --connect-timeout 10 --max-time 15 "$download_url" | grep -i "Last-Modified" | cut -d: -f2- | xargs -I{} date -d {} +%s 2>/dev/null)
 
     if [[ -f "$local_file" ]]; then
         # Get local file's modification time
@@ -431,14 +431,14 @@ single_file_check_and_download_file() {
             printf "${YELLOW}[INFO]${NC} Updating      %-31s (Newer version found)\n" "$local_file"
             rm -f "$local_file"  # Remove old file
             printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$local_file"
-            (curl -sL "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$local_file"
+            (curl -sL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$local_file"
         else
             printf "${BLUE}[SKIP]${NC} Found        %-31s ${BLUE}[Up-to-Date]${NC}\n" "$local_file"
         fi
     else
         # If file doesn't exist, download it
         printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$local_file"
-        (curl -sL "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$local_file"
+        (curl -sL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$local_file"
     fi
 }
 
@@ -468,7 +468,7 @@ download_obfuscated_scripts() {
         printf "${BLUE}[SKIP]${NC} Found        %-31s ${BLUE}[Already Exists]${NC}\n" "$filename"
     else
         printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$filename"
-        (curl -sL "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$filename"
+        (curl -sL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$filename"
     fi
 }
 
@@ -516,12 +516,30 @@ install_tool() {
         fi
     fi
 
-    # Update status to downloading
-    printf "\r${YELLOW}[INFO]${NC} Downloading %-31s " "$tool_name"
-    if ! eval "$install_command" >/dev/null 2>&1; then
-        printf "\r${RED}[ERROR]${NC} Failed to download %-31s ${RED}[FAILED]${NC}\n" "$tool_name"
+    # Update status to installing (with spinner)
+    printf "\r${YELLOW}[INFO]${NC} Installing   %-31s " "$tool_name"
+
+    # Run installation in background with spinner
+    (eval "$install_command" >/dev/null 2>&1) &
+    local install_pid=$!
+
+    # Show spinner while installing
+    local spinstr='|/-\'
+    local i=0
+    while kill -0 "$install_pid" 2>/dev/null; do
+        printf "\r${YELLOW}[INFO]${NC} Installing   %-31s [%c]" "$tool_name" "${spinstr:i:1}"
+        i=$(( (i + 1) % ${#spinstr} ))
+        sleep 0.1
+    done
+
+    # Check if the background process succeeded
+    wait "$install_pid"
+    local exit_code=$?
+
+    if [[ $exit_code -ne 0 ]]; then
+        printf "\r${RED}[ERROR]${NC} Failed to install %-31s ${RED}[FAILED]${NC}\n" "$tool_name"
         echo -e "${RED}[ERROR]${NC} Command used: ${YELLOW}${install_command}${NC}"
-        echo "$(date) - Failed to download ${tool_name} with command: ${install_command}" >> install_errors.log
+        echo "$(date) - Failed to install ${tool_name} with command: ${install_command}" >> install_errors.log
         return 1
     fi
 
@@ -545,7 +563,7 @@ install_tool() {
         #"[[ \$(which batcat) == '/usr/bin/batcat' ]]"
 
     install_tool "rustscan" \
-        "deb_url=\$(curl -s https://api.github.com/repos/RustScan/RustScan/releases/latest | grep 'browser_download_url.*amd64.deb' | head -1 | awk -F '\"' '{print \$4}'); if [[ -n \"\$deb_url\" ]]; then sudo wget -q -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb && rm -f rustscan.deb; else echo 'Failed to get RustScan URL' && exit 1; fi" \
+        "deb_url=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep 'browser_download_url.*amd64.deb' | head -1 | awk -F '\"' '{print \$4}'); if [[ -n \"\$deb_url\" ]]; then sudo wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb && rm -f rustscan.deb; else false; fi" \
         "[[ -x /usr/bin/rustscan ]] || command -v rustscan &>/dev/null"
 
     install_tool "wfuzz" \
@@ -829,7 +847,7 @@ git_download "https://github.com/dirkjanm/BloodHound.py.git" "bloodhound.py"
 folder_zip_download "https://download.sysinternals.com/files/PSTools.zip" "PSTools.zip" "PSTools"
 
 #Downloading Mimikatz (latest version)
-mimikatz_url=$(curl -s "https://api.github.com/repos/gentilkiwi/mimikatz/releases/latest" | grep "browser_download_url.*mimikatz_trunk.zip" | head -1 | awk -F '"' '{print $4}')
+mimikatz_url=$(curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/gentilkiwi/mimikatz/releases/latest" | grep "browser_download_url.*mimikatz_trunk.zip" | head -1 | awk -F '"' '{print $4}')
 if [[ -n "$mimikatz_url" ]]; then
     folder_zip_download "$mimikatz_url" "mimikatz_trunk.zip" "mimikatz"
 else
@@ -843,7 +861,7 @@ fi
 #####################################################################################################################
 
 #Downloading RunasCs.exe (latest version)
-runascs_url=$(curl -s "https://api.github.com/repos/antonioCoco/RunasCs/releases/latest" | grep "browser_download_url.*RunasCs.zip" | head -1 | awk -F '"' '{print $4}')
+runascs_url=$(curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/antonioCoco/RunasCs/releases/latest" | grep "browser_download_url.*RunasCs.zip" | head -1 | awk -F '"' '{print $4}')
 if [[ -n "$runascs_url" ]]; then
     single_file_zip_gz "$runascs_url" "RunasCS.zip"
 else
@@ -852,7 +870,7 @@ else
 fi
 
 #Downloading chisel (latest version)
-chisel_url=$(curl -s "https://api.github.com/repos/jpillora/chisel/releases/latest" | grep "browser_download_url.*linux_amd64.gz" | head -1 | awk -F '"' '{print $4}')
+chisel_url=$(curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/jpillora/chisel/releases/latest" | grep "browser_download_url.*linux_amd64.gz" | head -1 | awk -F '"' '{print $4}')
 chisel_filename=$(basename "$chisel_url" 2>/dev/null)
 if [[ -n "$chisel_url" && -n "$chisel_filename" ]]; then
     single_file_zip_gz "$chisel_url" "$chisel_filename"
