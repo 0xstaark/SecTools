@@ -1,6 +1,5 @@
 #!/bin/bash
 
-set -uo pipefail
 
 #Colors
 GREEN="\e[32m"
@@ -13,23 +12,14 @@ LIGHT_BLUE="\e[38;5;39m"
 NC="\e[0m"
 
 #Environment variables
-startdir="$(pwd)"
-user_home="$(eval echo "~${SUDO_USER:-$USER}")"
-zshrc_file="${user_home}/.zshrc"
-user_name="${SUDO_USER:-$(whoami)}"
-
-# Cached API responses for performance
-declare -A api_cache
-
-# Cleanup function for proper exit
-cleanup() {
-    cd "${startdir}" 2>/dev/null
-}
-trap cleanup EXIT
+startdir=$(pwd)
+user_home=$(eval echo "~$SUDO_USER")
+zshrc_file="$user_home/.zshrc"
+user_name=${SUDO_USER:-$(whoami)}
 
 
 echo ""
-echo -e "${GREEN} Created by:"
+echo -e ${GREEN}" Created by:"
 echo -e " ${RED}   ___              _                     _     "
 echo -e " ${YELLOW}  / _ \            | |                   | |    "
 echo -e " ${ORANGE} | | | |__  __ ___ | |_  __ _  __ __ ___ | | __ "
@@ -37,7 +27,7 @@ echo -e " ${BLUE} | | | |\ \/ // __|| __|/ _\ |/ _\ || __|| |/ / "
 echo -e " ${LIGHT_BLUE} | |_| | >  < \__ \| |_| (_| ||(_| || |  |   <  "
 echo -e " ${VIOLET}  \___/ /_/\_\|___/ \__|\__,_|\__,_||_|  |_|\_\ "
 echo ""
-echo -e "${BLUE}https://github.com/0xstaark${NC}"
+echo -e "${BLUE}https://github.com/0xstaark"${NC}
 echo ""
 
 
@@ -45,191 +35,394 @@ echo ""
 # Check network connection
 ###################################################################################################################
 
-if ! ping -c 1 -W 5 8.8.8.8 &> /dev/null; then
-    echo -e "${RED}[WAR]${NC}  No network connection. Exiting..."
+if ! ping -c 1 8.8.8.8 &> /dev/null; then
+    echo ${RED}"[WAR]${NC}  No network connection. Exiting..."${NC}
     exit 1
 fi
+
+
+###################################################################################################################
+# Define spinner function for Download
+###################################################################################################################
+spinner() {
+    local pid=$!  # Get the PID of the last background process
+    local delay=0.1
+    local spinstr='|/-\'
+    local i=0
+    while kill -0 $pid 2>/dev/null; do
+        printf "\r${YELLOW}[INFO]${NC} Downloading   %-31s [%c]" "$1" "${spinstr:i:1}"
+        i=$(( (i + 1) % ${#spinstr} ))
+        sleep $delay
+    done
+    printf "\r${GREEN}[OK]${NC}   Downloaded   %-31s ${GREEN}[DONE]${NC}\n" "$1"
+}
+
+
+###################################################################################################################
+# Define spinner function for cleanup
+###################################################################################################################
+spinner2() {
+    local pid=$!  # Get the PID of the last background process
+    local delay=0.1
+    local spinstr2='|/-\'
+    local i=0
+    while kill -0 $pid 2>/dev/null; do
+        printf "\r${BLUE}[INFO]${NC} Cleanup... %-31s [%c]" "${spinstr2:i:1}"
+        i=$(( (i + 1) % ${#spinstr2} ))
+        sleep $delay
+    done
+}
+
+
+###################################################################################################################
+# Define spinner function for update and upgrade
+###################################################################################################################
+spinner3() {
+    local pid=$!  # Get the PID of the last background process
+    local delay=0.1
+    local spinstr3='|/-\'
+    local i=0
+    while kill -0 $pid 2>/dev/null; do
+        printf "\r${YELLOW}[INFO]${NC} %s                             [%c]" "$1" "${spinstr3:i:1}"
+        i=$(( (i + 1) % ${#spinstr3} ))
+        sleep $delay
+    done
+}
+
+
+###################################################################################################################
+# Define spinner function for Tool install
+###################################################################################################################
+spinner4() {
+    local pid=$!  # Get the PID of the last background process
+    local delay=0.1
+    local spinstr='|/-\'
+    local i=0
+    while kill -0 $pid 2>/dev/null; do
+        printf "\r${YELLOW}[INFO]${NC} Installing   %-31s [%c]" "$1" "${spinstr4:i:1}"
+        i=$(( (i + 1) % ${#spinstr4} ))
+        sleep $delay
+    done
+}
+
+
+#####################################################################################################################
+# Cleanup and house keeping
+#####################################################################################################################
+perform_cleanup() {
+    # Start spinner and cleanup
+    printf "${BLUE}[INFO]${NC} Performing cleanup...   "
+
+    {
+        # Perform cleanup operations
+        cp mimikatz/x64/mimikatz.exe . >/dev/null 2>&1
+        mv RunasCS RunasCS.exe >/dev/null 2>&1
+        rm -rf x64 Win32 PassTheCert PetitPotam mimikatz >/dev/null 2>&1
+
+        # Adjust ownership of tools directory if needed
+        [[ $(stat -c '%U' "${toolsdir}") != "${user_name}" ]] && chown -R "${user_name}:${user_name}" "${toolsdir}" >/dev/null 2>&1
+
+        # Return to the original directory
+        cd "${startdir}"
+    } & spinner2  # Spinner runs alongside the cleanup block
+
+    # Overwrite the spinner with the final aligned message
+    wait  # Wait for the cleanup to finish
+    echo ""
+    printf "\r${BLUE}[INFO]${NC} Cleanup...   %-31s ${BLUE}[COMPLETE]${NC}\n" ""
+}
+
 
 ###################################################################################################################
 # Ask user if they want to update
 ###################################################################################################################
-
 ask_update() {
-    read -p "Do you want to run 'sudo apt update'? (y/n): " choice
+    # Display the initial prompt
+    printf "\r${YELLOW}[INFO]${NC} Do you want to run 'sudo apt update'? (y/n): "
+    read -r choice
+
     case "$choice" in
         [Yy]* )
-            echo -e "${YELLOW}[INFO]${NC} Running 'sudo apt update'..."
-            sudo apt -q update >/dev/null 2>&1
-            ;;
+            tput cuu1  # Move the cursor up one line
+            tput el    # Clear the entire line
+            # Overwrite the prompt line and show the spinner
+            printf "\r${BLUE}[INFO]${NC} Updating System                           "
+
+            # Run the update command in the background with a spinner
+            (
+                sudo apt -q update -y >/dev/null 2>&1
+            ) & spinner3 "Updating System"
+
+            # Overwrite the spinner with the [COMPLETE] message
+            printf "\r${BLUE}[INFO]${NC} Updating System                           ${BLUE}[COMPLETE]${NC}\n"
+             ;;
         [Nn]* )
-            echo -e "${YELLOW}[INFO]${NC} Skipping update."
+            # Overwrite the prompt line with the skip message
+            printf "\r${RED}[INFO]${NC} Skipping update.                          \n"
             ;;
         * )
-            echo -e "${RED}[WAR]${NC}  Invalid input. Please enter 'y' or 'n'."
-            ask_update
+            # Overwrite the prompt line with an invalid input warning
+            printf "\r${RED}[WAR]${NC} Invalid input. Please enter 'y' or 'n'.    \n"
             ;;
     esac
 }
 
 ###################################################################################################################
-# Set variables as global
+# Ask user if they want to upgrade
 ###################################################################################################################
+ask_upgrade() {
+    read -p "$(echo -e "${YELLOW}[INFO]${NC} Do you want to run 'sudo apt upgrade'? (y/n): ")" choice
 
-# Function to set the variable
-get_script_dir() {
-    # Default directory
-    toolsdir="/opt/tools"
+    case "$choice" in
+        [Yy]* )
+            tput cuu1  # Move the cursor up one line
+            tput el    # Clear the entire line
+            # Initial line with spinner
+            printf "${BLUE}[INFO]${NC} Upgrading System                "
 
-    # Prompt the user for a custom directory
-    echo -e "${YELLOW}[INFO]${NC} Choose directory to download Script to. Example: /opt/tools"
-    read -p "$(echo -e "${YELLOW}[INFO]${NC} Enter the directory to use, hit ENTER for default: ${YELLOW}[${toolsdir}]${NC}: ")" userdir
+            # Run the upgrade command in the background with the spinner
+            (
+                sudo apt -q upgrade -y >/dev/null 2>&1
+            ) & spinner3 "Upgrading System"
 
-    # If user provides input, use it as the tools directory
-    if [[ -n "$userdir" ]]; then
-        toolsdir="$userdir"
+            # Overwrite the spinner line with the [COMPLETE] message
+            printf "\r${BLUE}[INFO]${NC} Upgrading System                          ${BLUE}[COMPLETE]${NC}\n"
+            ;;
+        [Nn]* )
+            echo -e "${RED}[INFO]${NC} Skipping upgrade."
+            ;;
+        * )
+            echo -e "${RED}[WAR]${NC} Invalid input. Please enter 'y' or 'n'."
+            ;;
+    esac
+}
+
+
+###################################################################################################################
+# Error handeling
+###################################################################################################################
+handle_error() {
+    local tool_name="$1"
+    local failed_command="$2"
+
+    echo -e "${RED}[ERROR]${NC} An error occurred while installing ${YELLOW}${tool_name}${NC}."
+    echo -e "${RED}[ERROR]${NC} Command: ${YELLOW}${failed_command}${NC}"
+    echo -e "${RED}[ERROR]${NC} Possible causes:"
+    echo -e "  1. Network issues (check your internet connection)."
+    echo -e "  2. Repository problems (try running 'sudo apt update')."
+    echo -e "  3. Missing dependencies (check logs or output)."
+    echo -e "  4. Insufficient permissions (ensure you are using sudo)."
+    echo -e "${RED}[INFO]${NC} Skipping ${tool_name} and continuing with the next tool."
+    
+    # Optionally log errors to a file
+    echo "$(date) - Failed to install ${tool_name} with command: ${failed_command}" >> install_errors.log
+}
+
+
+###################################################################################################################
+# Function to handle Git repository downloads
+###################################################################################################################
+git_download() {
+    local repo_url="$1"
+    local repo_name="$2"
+
+    if [[ -d "$repo_name" ]]; then
+        #printf "${YELLOW}[INFO]${NC} Removing existing %-31s\n" "$repo_name"
+        rm -rf "$repo_name"
     fi
 
-    # Check if directory exists
-    if [[ -d "$toolsdir" ]]; then
-        echo -e "${YELLOW}[INFO]${NC} Using directory: [${BLUE}${toolsdir}${NC}]"
+    printf "${YELLOW}[INFO]${NC} Cloning       %-31s " "$repo_name"
+    (git clone "$repo_url" >/dev/null 2>&1) & spinner "$repo_name"
+}
+
+
+###################################################################################################################
+# Function to handle ZIP repository downloads
+###################################################################################################################
+folder_zip_download() {
+    local zip_url="$1"
+    local zip_name="$2"
+    local extract_dir="${3:-${zip_name%.zip}}"  # Default directory derived from zip name
+
+    # Ensure previous directories and zip files are cleaned up
+    if [[ -d "$extract_dir" || -f "$zip_name" ]]; then
+        rm -rf "$extract_dir" "$zip_name"
+    fi
+
+    # Download the zip file
+    (curl -sL "$zip_url" -o "$zip_name" >/dev/null 2>&1) & spinner "$extract_dir"
+
+    # Extract the zip file into the specified directory
+    unzip -qo "$zip_name" -d "$extract_dir" >/dev/null 2>&1
+
+    # Clean up the zip file after extraction
+    rm -f "$zip_name"
+}
+
+
+###################################################################################################################
+# Function to handle single file which are ZIP
+###################################################################################################################
+single_file_zip_gz() {
+    local file_url="$1"
+    local file_name="$2"
+
+    # Ensure previous files are cleaned up
+    if [[ -f "$file_name" ]]; then
+        rm -f "$file_name"
+    fi
+
+    # Download the archive file
+    (curl -sL "$file_url" -o "$file_name" >/dev/null 2>&1) & spinner "$file_name"
+
+    # Determine file type and extract accordingly
+    if [[ "$file_name" == *.gz ]]; then
+        # For .gz files, extract as a single file
+        gunzip -c "$file_name" > "${file_name%.gz}"
+        #printf "\r${GREEN}[OK]${NC} Extracted ${file_name} as ${file_name%.gz}\n"
+    elif [[ "$file_name" == *.zip ]]; then
+        # For .zip files, extract the single file (assumes only one file inside)
+        local extracted_file=$(unzip -Z1 "$file_name" | head -1)
+        unzip -p "$file_name" "$extracted_file" > "${file_name%.zip}"
+        #printf "\r${GREEN}[OK]${NC} Extracted ${file_name} as ${file_name%.zip}\n"
     else
-        if ! mkdir -p "$toolsdir" 2>/dev/null; then
-            echo ""
-            echo -e "${RED}[WAR]${NC} You don't have access to create folders in [${BLUE}${toolsdir}${NC}]. Rerun the script with sudo."
-            exit 1
-        else
-            echo -e "${YELLOW}[INFO]${NC} Created directory: [${BLUE}${toolsdir}${NC}]"
-        fi
+        printf "\r${YELLOW}[WARNING]${NC} Unsupported file format: ${file_name}\n"
     fi
+
+    # Clean up the downloaded archive file
+    rm -f "$file_name"
 }
 
-# Function to get cached API response or fetch new one
-get_api_response() {
-    local api_url="$1"
-    if [[ -z "${api_cache[$api_url]:-}" ]]; then
-        api_cache[$api_url]=$(curl -s "$api_url")
-    fi
-    echo "${api_cache[$api_url]}"
-}
 
 ###################################################################################################################
 # function to check for latest release of a file and download the file from GitHub if needed a newer version is avilable
 ###################################################################################################################
-check_and_download_file() {
+# Main Function (Now One Line per Download)
+api_file_check_and_download_file() {
     local api_url="$1"
-    local file_url="$2"
-    local local_file="$3"
-    local local_file2="${4:-$local_file}"
-    local existing_file=""
+    local filename="$2"
+    local filter="$3"
 
-    # Get the time from the GitHub API (use cached response)
-    local api_response
-    api_response=$(get_api_response "$api_url")
-    local github_time
-    github_time=$(echo "$api_response" | grep 'updated_at' | head -1 | sed 's/ //g' | awk -F '"' '{print $4}' | sed 's/T.*//')
+    # Get release information from GitHub API
+    local response=$(curl -s "$api_url")
 
-    # Check if the file exists locally (check both possible names)
-    if [[ -f "$local_file" ]]; then
-        existing_file="$local_file"
-    elif [[ -f "$local_file2" ]]; then
-        existing_file="$local_file2"
+    # Determine if the filename has an extension
+    local file_url=""
+    if [[ "$filename" =~ \.[a-zA-Z0-9]+$ ]]; then
+        # Filename has an extension — use stricter match
+        file_url=$(echo "$response" | \
+            grep -i 'browser_download_url' | \
+            grep -i -w "$filter" | \
+            grep -i '\.sh\|\.exe\|\.zip' | \
+            head -1 | \
+            awk -F '"' '{print $4}')
+    else
+        # No extension in filename — match more loosely
+        file_url=$(echo "$response" | \
+            grep -i 'browser_download_url' | \
+            grep -i -w "$filter" | \
+            head -1 | \
+            awk -F '"' '{print $4}')
     fi
 
-    if [[ -n "$existing_file" ]]; then
-        # Get the time from the local file
-        local local_time
-        local_time=$(stat -c "%y" "$existing_file" 2>/dev/null | awk '{print $1}')
+    # Extract remote timestamp (optional logic for freshness checking)
+    local remote_time=$(echo "$response" | grep -i '"updated_at"' | head -1 | awk -F '"' '{print $4}')
+    local remote_timestamp=$(date -d "$remote_time" +%s 2>/dev/null)
 
-        # Convert the times to timestamps (with error handling)
-        local github_timestamp local_timestamp
-        github_timestamp=$(date -d "$github_time" +%s 2>/dev/null || echo 0)
-        local_timestamp=$(date -d "$local_time" +%s 2>/dev/null || echo 0)
+    # If no matching file was found, warn and return
+    if [[ -z "$file_url" ]]; then
+        printf "\r${YELLOW}[WARNING]${NC} Could not find download URL for ${filename}\n"
+        return
+    fi
 
-        # Compare the timestamps to identify the newest file
-        if [[ "$github_timestamp" -gt "$local_timestamp" ]]; then
-            # Download the file
-            rm -f "$existing_file" 2>/dev/null
-            if wget -q "$file_url" -O "$local_file" 2>/dev/null; then
-                printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Updated:" "$local_file"
-            else
-                printf "${RED}[WAR]${NC}  %-15s %s\n" "Failed to download:" "$local_file"
-            fi
-        else
-            echo -e "${GREEN}[OK]${NC}   You already have the newest version of: ${YELLOW}$local_file${NC}"
+    # Download with spinner (Direct or ZIP)
+    if [[ "$file_url" == *.zip ]]; then
+        local temp_zip="temp_download.zip"
+        (curl -sL "$file_url" -o "$temp_zip" >/dev/null 2>&1) & spinner "$filename"
+
+        local extracted_file=$(unzip -Z1 "$temp_zip" | grep -i "$filename")
+        if [[ -z "$extracted_file" ]]; then
+            printf "\r${YELLOW}[WARNING]${NC} ${filename} not found in ZIP archive.\n"
+            rm -f "$temp_zip"
+            return
         fi
+
+        unzip -jo "$temp_zip" "$extracted_file" >/dev/null 2>&1
+        mv "$extracted_file" "$filename" 2>/dev/null || true
+        rm -f "$temp_zip"
+
     else
-        # If the file doesn't exist, download it
-        if wget -q "$file_url" 2>/dev/null; then
-            if [[ -f "$local_file" || -f "$local_file2" ]]; then
-                printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Downloading:" "$local_file"
-            else
-                printf "${RED}[WAR]${NC}  %-15s %s\n" "Failed to download:" "$local_file"
-            fi
-        else
-            printf "${RED}[WAR]${NC}  %-15s %s\n" "Failed to download:" "$local_file"
-        fi
+        (curl -sL "$file_url" -o "$filename" >/dev/null 2>&1) & spinner "$filename"
     fi
 }
 
 
 ###################################################################################################################
 # function to check for latest version of a single file, and download if it's a newer version.
-# Uses HTTP Last-Modified header for comparison since raw GitHub URLs don't provide API data
 ###################################################################################################################
 single_file_check_and_download_file() {
     local download_url="$1"
     local local_file="$2"
 
-    # Check if file exists
+    # Fetch the `Last-Modified` timestamp from the remote file
+    local remote_time=$(curl -sI "$download_url" | grep -i "Last-Modified" | cut -d: -f2- | xargs -I{} date -d {} +%s 2>/dev/null)
+
     if [[ -f "$local_file" ]]; then
-        # Get the Last-Modified time from the remote file via HTTP headers
-        local remote_time
-        remote_time=$(curl -sI "$download_url" 2>/dev/null | grep -i "last-modified" | sed 's/last-modified: //i' | tr -d '\r')
+        # Get local file's modification time
+        local local_time=$(stat -c "%Y" "$local_file")
 
-        if [[ -n "$remote_time" ]]; then
-            # Get the time from the local file
-            local local_time
-            local_time=$(stat -c "%y" "$local_file" 2>/dev/null | awk '{print $1}')
-
-            # Convert the times to timestamps
-            local remote_timestamp local_timestamp
-            remote_timestamp=$(date -d "$remote_time" +%s 2>/dev/null || echo 0)
-            local_timestamp=$(date -d "$local_time" +%s 2>/dev/null || echo 0)
-
-            # Compare the timestamps to identify the newest file
-            if [[ "$remote_timestamp" -gt "$local_timestamp" ]]; then
-                # Download file
-                rm -f "$local_file" 2>/dev/null
-                if wget -q "$download_url" -O "$local_file" 2>/dev/null && [[ -s "$local_file" ]]; then
-                    printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Updated:" "$local_file"
-                else
-                    printf "${RED}[WAR]${NC}  %-15s %s\n" "Failed to download:" "$local_file"
-                fi
-            else
-                echo -e "${GREEN}[OK]${NC}   You already have the newest version of: ${YELLOW}$local_file${NC}"
-            fi
+        # Compare timestamps
+        if [[ "$remote_time" -gt "$local_time" ]]; then
+            printf "${YELLOW}[INFO]${NC} Updating      %-31s (Newer version found)\n" "$local_file"
+            rm -f "$local_file"  # Remove old file
+            printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$local_file"
+            (curl -sL "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$local_file"
         else
-            # Can't get remote time, skip update check
-            echo -e "${GREEN}[OK]${NC}   File exists: ${YELLOW}$local_file${NC}"
+            printf "${BLUE}[SKIP]${NC} Found        %-31s ${BLUE}[Up-to-Date]${NC}\n" "$local_file"
         fi
     else
-        # If the file doesn't exist, download it
-        if wget -q "$download_url" -O "$local_file" 2>/dev/null && [[ -s "$local_file" ]]; then
-            printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Downloading:" "$local_file"
-        else
-            rm -f "$local_file" 2>/dev/null  # Remove empty/failed download
-            printf "${RED}[WAR]${NC}  %-15s %s\n" "Failed to download:" "$local_file"
-        fi
+        # If file doesn't exist, download it
+        printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$local_file"
+        (curl -sL "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$local_file"
     fi
 }
 
 
 ###################################################################################################################
-# INSTALLING TOOLS
+# Function to download obfuscated scripts from GitHub
 ###################################################################################################################
-# Function for Installing tools, and then calling the function via the menu
-install_tools() {
+download_obfuscated_scripts() {
+    local download_url="$1"
+    local filename="$2"
 
+    # Require toolsdir to be set already
+    if [[ -z "$toolsdir" ]]; then
+        echo -e "${RED}[ERROR]${NC} toolsdir is not set."
+        return 1
+    fi
+
+    local obftoolsdir="${toolsdir}/obfuscated"
+    local local_file="${obftoolsdir}/${filename}"
+
+    mkdir -p "$obftoolsdir" >/dev/null 2>&1 || {
+        echo -e "${RED}[ERROR]${NC} Could not create directory: ${obftoolsdir}"
+        return 1
+    }
+
+    if [[ -f "$local_file" ]]; then
+        printf "${BLUE}[SKIP]${NC} Found        %-31s ${BLUE}[Already Exists]${NC}\n" "$filename"
+    else
+        printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$filename"
+        (curl -sL "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$filename"
+    fi
+}
+
+
+###################################################################################################################
+# Tools install function
+###################################################################################################################
+#Fuction for Installing tools, and then calling the function via the menu
+install_tools() {
     # Check if user is NOT root
     if [[ $UID -ne 0 ]]; then
         echo -e "${YELLOW}[WAR]${NC} To install the tools you need to run with SUDO"
@@ -237,774 +430,536 @@ install_tools() {
         sudo -v || exit 1
     fi
 
-    echo -e "${GREEN}-----------------------------------------------------"
+    echo -e "${GREEN}-------------------------------------------------------"
     echo -e "${GREEN}[INFO] Installing tools"
-    echo -e "${GREEN}-----------------------------------------------------${NC}"
+    echo -e "${GREEN}-------------------------------------------------------"
 
-    # Installing seclists
-    if [[ -d "/usr/share/seclists" ]]; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "seclists" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "seclists (this may take a while)"
-        sudo apt-get -qq -y install seclists >/dev/null 2>&1
+    # Function to handle tool installation with spinner
+install_tool() {
+    local tool_name="$1"         # Name of the tool
+    local install_command="$2"  # Command to install the tool
+    local check_command="$3"    # Command to check if the tool is already installed
+    local pre_install_command="$4"  # Optional pre-installation command
+
+    # Start the process on a single line
+    printf "\r${YELLOW}[INFO]${NC} Processing   %-31s " "$tool_name"
+
+    # Check if the tool is already installed
+    if eval "$check_command"; then
+        printf "\r${BLUE}[SKIP]${NC} Found      %-31s ${BLUE}[Installed]${NC}\n" "$tool_name"
+        return
     fi
 
-    # Installing batcat
-    if command -v batcat &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "Batcat" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "batcat"
-        sudo apt-get -qq -y install bat >/dev/null 2>&1
-    fi
-
-    # Installing Rustscan
-    if command -v rustscan &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "Rustscan" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "Rustscan"
-        local versionnr
-        versionnr=$(curl -s https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
-        if [[ -n "$versionnr" ]]; then
-            wget -q -O /tmp/rustscan.deb "https://github.com/RustScan/RustScan/releases/download/${versionnr}/rustscan_${versionnr}_amd64.deb" 2>/dev/null
-            sudo dpkg -i /tmp/rustscan.deb >/dev/null 2>&1
-            rm -f /tmp/rustscan.deb 2>/dev/null
-        else
-            printf "${RED}[WAR]${NC}  Failed to get Rustscan version\n"
+    # Run the pre-installation command if provided
+    if [[ -n "$pre_install_command" ]]; then
+        printf "\r${YELLOW}[INFO]${NC} Preparing   %-31s " "$tool_name"
+        if ! eval "$pre_install_command" >/dev/null 2>&1; then
+            printf "\r${RED}[ERROR]${NC} Failed to prepare %-31s ${RED}[FAILED]${NC}\n" "$tool_name"
+            echo -e "${RED}[ERROR]${NC} Pre-install command: ${YELLOW}${pre_install_command}${NC}"
+            echo "$(date) - Failed to prepare ${tool_name} with pre-install command: ${pre_install_command}" >> install_errors.log
+            return 1
         fi
     fi
 
-    # Installing wfuzz
-    if command -v wfuzz &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "wfuzz" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "wfuzz"
-        sudo apt-get -qq -y install wfuzz >/dev/null 2>&1
+    # Update status to downloading
+    printf "\r${YELLOW}[INFO]${NC} Downloading %-31s " "$tool_name"
+    if ! eval "$install_command" >/dev/null 2>&1; then
+        printf "\r${RED}[ERROR]${NC} Failed to download %-31s ${RED}[FAILED]${NC}\n" "$tool_name"
+        echo -e "${RED}[ERROR]${NC} Command used: ${YELLOW}${install_command}${NC}"
+        echo "$(date) - Failed to download ${tool_name} with command: ${install_command}" >> install_errors.log
+        return 1
     fi
 
-    # Installing ffuf
-    if command -v ffuf &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "ffuf" "Already installed"
+    # Check if the tool was successfully installed
+    if eval "$check_command"; then
+        printf "\r${GREEN}[OK]${NC}     Installed  %-31s ${GREEN}[DONE]${NC}\n" "$tool_name"
     else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "ffuf"
-        sudo apt-get -qq -y install ffuf >/dev/null 2>&1
+        printf "\r${RED}[ERROR]${NC} Failed to install %-31s ${RED}[FAILED]${NC}\n" "$tool_name"
+        echo "$(date) - Failed to install ${tool_name} with command: ${install_command}" >> install_errors.log
     fi
-
-    # Installing Bloodhound
-    if command -v bloodhound &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "Bloodhound" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "bloodhound"
-        sudo apt-get -qq -y install bloodhound >/dev/null 2>&1
-    fi
-
-    # Installing Neo4j
-    if command -v neo4j &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "Neo4j" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "Neo4j"
-        sudo apt-get -qq -y install neo4j >/dev/null 2>&1
-    fi
-
-    # Installing GoBuster
-    if command -v gobuster &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "GoBuster" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "GoBuster"
-        sudo apt-get -qq -y install gobuster >/dev/null 2>&1
-    fi
-
-    # Installing feroxbuster
-    if command -v feroxbuster &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "Feroxbuster" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "Feroxbuster"
-        sudo apt-get -qq -y install feroxbuster >/dev/null 2>&1
-    fi
-
-    # Installing Coercer
-    if command -v coercer &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "Coercer" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "Coercer"
-        sudo pip3 install -q coercer 2>/dev/null
-    fi
-
-    # Installing Certipy-ad
-    if command -v certipy-ad &>/dev/null || command -v certipy &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "Certipy-ad" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "Certipy-ad"
-        sudo pip3 install -q certipy-ad 2>/dev/null
-    fi
-
-    # Installing pypykatz
-    if command -v pypykatz &>/dev/null; then
-        printf "${GREEN}[OK]${NC}   %-15s %s\n" "pypykatz" "Already installed"
-    else
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Installing" "pypykatz"
-        sudo pip3 install -q pypykatz 2>/dev/null
-    fi
-
-    echo ""
-    echo -e "${BLUE}[COMPLETE]${NC}"
 }
 
 
+    # Tool installation logic
+    install_tool "seclists" \
+        "sudo apt-get -qq -y install seclists" \
+        "[[ \$(ls /usr/share | grep seclists) == 'seclists' ]]"
+
+    #install_tool "batcat" \
+        #"sudo apt-get -qq -y install bat" \
+        #"[[ \$(which batcat) == '/usr/bin/batcat' ]]"
+
+    install_tool "rustscan" \
+        "versionnr=\$(curl -s https://api.github.com/repos/RustScan/RustScan/releases | grep 'browser_download_url' | head -1 | tr -d ' ' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'); sudo wget -q -O rustscan.deb https://github.com/RustScan/RustScan/releases/download/\${versionnr}/rustscan_\${versionnr}_amd64.deb && sudo dpkg -i rustscan.deb && rm rustscan.deb" \
+        "[[ \$(which rustscan) == '/usr/bin/rustscan' ]]"
+
+    install_tool "wfuzz" \
+        "sudo apt-get -qq -y install wfuzz" \
+        "[[ \$(which wfuzz) == '/usr/bin/wfuzz' ]]"
+
+    install_tool "ffuf" \
+        "sudo apt-get -qq -y install ffuf" \
+        "[[ \$(which ffuf) == '/usr/bin/ffuf' ]]"
+
+    install_tool "bloodhound" \
+        "sudo apt-get -qq -y install bloodhound" \
+        "[[ \$(which bloodhound) == '/usr/bin/bloodhound' ]]"
+
+    install_tool "neo4j" \
+        "sudo apt-get -qq -y install neo4j" \
+        "[[ \$(which neo4j) == '/usr/bin/neo4j' ]]"
+
+    install_tool "gobuster" \
+        "sudo apt-get -qq -y install gobuster" \
+        "[[ \$(which gobuster) == '/usr/bin/gobuster' ]]"
+
+    install_tool "feroxbuster" \
+        "sudo apt-get -qq -y install feroxbuster" \
+        "[[ \$(which feroxbuster) == '/usr/bin/feroxbuster' ]]"
+
+    install_tool "certipy-ad" \
+        "sudo python3 -m pip install -qq certipy-ad" \
+        "[[ \$(which certipy-ad) == '/usr/local/bin/certipy-ad' || \$(which certipy-ad) == '/usr/bin/certipy-ad' ]]"
+
+    install_tool "pypykatz" \
+        "sudo pip3 install -qqq pypykatz" \
+        "[[ \$(which pypykatz) == '/usr/local/bin/pypykatz' || \$(which pypykatz) == '/usr/bin/pypykatz' ]]"
+
+    install_tool "sublime-text" \
+        "sudo wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg | gpg --no-default-keyring --keyring ./temp-keyring.gpg --import && sudo gpg --no-default-keyring --keyring ./temp-keyring.gpg --export --output sublime-text.gpg && sudo rm temp-keyring.gpg temp-keyring.gpg~ && sudo mkdir -p /usr/local/share/keyrings && sudo mv ./sublime-text.gpg /usr/local/share/keyrings && echo 'deb [signed-by=/usr/local/share/keyrings/sublime-text.gpg] https://download.sublimetext.com/ apt/stable/' | sudo tee /etc/apt/sources.list.d/sublime-text.list && sudo apt-get update -qq && sudo apt-get install -qq -y sublime-text" \
+        "[[ \$(which subl) == '/usr/bin/subl' ]]"
+
+    install_tool "docker" \
+        "sudo apt-get -qq -y install docker.io" \
+        "[[ \$(which docker) == '/usr/bin/docker' ]]"
+
+    install_tool "docker-compose" \
+        "sudo apt-get -qq -y install docker-compose" \
+        "[[ \$(which docker-compose) == '/usr/bin/docker-compose' ]]"
+        
+    install_tool "bloodhound-CE" \
+        "curl -L https://ghst.ly/getbhce -o /opt/bloodhoundCE/docker-compose.yml" \
+        "[[ -d /opt/bloodhoundCE && -f /opt/bloodhoundCE/docker-compose.yml ]]" \
+        "mkdir -p /opt/bloodhoundCE"
+        
+
+    echo ""
+    echo -e "${BLUE}[COMPLETE]${NC} All tools installed successfully!"
+
+}
+
 ###################################################################################################################
-# DOWNLOADING SCRIPTS
+# DONWLOADING SCRIPTS
 ###################################################################################################################
 
-# Function for downloading scripts, and then calling the function via the menu
+#Fuction for dowloading scripts, and then calling the function via the menu
 download_scripts() {
 
-    # Change to the tools directory
-    cd "$toolsdir" || { echo -e "${RED}[WAR]${NC} Cannot access directory: $toolsdir"; return 1; }
-    echo -e "${GREEN}-----------------------------------------------------"
-    echo -e "${GREEN}[INFO] Downloading Scripts into ${BLUE}[${toolsdir}]"
-    echo -e "${GREEN}-----------------------------------------------------${NC}"
-    sleep 1
+# Tools direcotry
+toolsdir="/opt/tools"
+
+# Prompt the user for a custom directory
+echo -e "${YELLOW}[INFO]${NC} Choose directory to download Script to. Example: /opt/tools"
+read -p "$(echo -e "${YELLOW}[INFO]${NC} Enter the directory to use, hit ENTER for default: ${YELLOW}[${toolsdir}]${NC}: ")" userdir
+
+# If user provides input, use it as the tools directory
+if [[ -n "$userdir" ]]; then
+    toolsdir="$userdir"
+fi
+
+# Check if directory exists
+if [[ -d "$toolsdir" ]]; then
+    echo -e "${YELLOW}[INFO]${NC} Using directory: [${BLUE}${toolsdir}${YELLOW}]"
+else
+    mkdir -p "$toolsdir" >/dev/null 2>&1
+    # Check if the command succeeded
+    if [[ $? -ne 0 ]]; then
+        echo ""
+        echo -e "${RED}[WAR]${NC} You don't have access to create folders in [${BLUE}${toolsdir}${NC}]. Rerun the script with sudo."
+        exit 1
+    else
+        echo -e "${YELLOW}[INFO]${NC} Created directory: [${BLUE}${toolsdir}${NC}]"
+    fi
+fi
+
+# Change to the tools directory
+cd "$toolsdir"
+echo -e ${GREEN}"-------------------------------------------------------"
+echo -e ${GREEN}"[INFO] Downloading Scripts to ${BLUE}[${toolsdir}]"
+echo -e ${GREEN}"-------------------------------------------------------"
+sleep 1
 
 
 #####################################################################################################################
-#Latest releases
+# Latest releases
 #####################################################################################################################
+#Arguments:
+#  1. GitHub API URL: Provides release details (version, download URLs).
+#  2. Local Filename: Saves the downloaded file with this name.
+#  3. File Filter (optional): Matches the correct file from multiple release assets.
 
-#Downloading mimikatz
-# GitHub API URL for the latest release
-api_url="https://api.github.com/repos/gentilkiwi/mimikatz/releases/latest"
-file=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | sed 's/"//g')
-#latest_release=$(echo $latest | awk -F '/' '{print $1}')
-#zip_file_name=$(echo $latest | awk -F '/' '{print $2}' )
-#file="https://github.com/gentilkiwi/mimikatz/releases/download/$latest_release/$zip_file_name"
-local_file="mimikatz.exe"
-local_file2="mimikatz_trunk.zip"
-check_and_download_file "$api_url" "$file" "$local_file" "$local_file2"
+# Usage: api_file_check_and_download_file "API-URL" "local file name" "Filter (Optional)"
 
+# Downloading SharpHound.exe
+api_file_check_and_download_file "https://api.github.com/repos/SpecterOps/SharpHound/releases/latest" "SharpHound.exe" "SharpHound"
 
-#Downloading SharpHound.exe
-# GitHub API URL for the latest release
-api_url="https://api.github.com/repos/BloodHoundAD/SharpHound/releases/latest"
-file=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | sed 's/"//g')
-#lastest_release=$(echo $latest) | awk -F '/' '{print $1}'
-#zip_file_name=$(echo $latest) | awk -F '/' '{print $2}' | sed 's/"$//'
-#file="https://github.com/BloodHoundAD/SharpHound/releases/download/$lastest_release/$zip_file_name"
-local_file="SharpHound.exe"
-local_file2="$(echo $file | awk -F '/' '{print $9}')"
-check_and_download_file "$api_url" "$file" "$local_file" "$local_file2"
+# Downloading winPEASx64.exe
+api_file_check_and_download_file "https://api.github.com/repos/peass-ng/PEASS-ng/releases/latest" "winPEASx64.exe" "winPEASx64"
 
+# Downloading winPEASany.exe
+api_file_check_and_download_file "https://api.github.com/repos/peass-ng/PEASS-ng/releases/latest" "winPEASany.exe" "winPEASany"
 
-#Downloading winPEASx64.exe
-# GitHub API URL for the latest release
-api_url="https://api.github.com/repos/peass-ng/PEASS-ng/releases"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | head -1 | awk '{print $2}' | awk -F "/" '{print $8}')
-file="https://github.com/peass-ng/PEASS-ng/releases/download/$latest/winPEASx64.exe"
-local_file="winPEASx64.exe"
-check_and_download_file "$api_url" "$file" "$local_file"
+# Downloading Linpeas.sh
+api_file_check_and_download_file "https://api.github.com/repos/peass-ng/PEASS-ng/releases" "linpeas.sh" "linpeas"
 
+# Downloading pspy32
+api_file_check_and_download_file "https://api.github.com/repos/DominicBreuker/pspy/releases/latest" "pspy32" "pspy32"
 
-#Downloading winPEASany.exe
-# GitHub API URL for the latest release
-api_url="https://api.github.com/repos/peass-ng/PEASS-ng/releases"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | head -1 | awk '{print $2}' | awk -F "/" '{print $8}')
-file="https://github.com/peass-ng/PEASS-ng/releases/download/$latest/winPEASany.exe"
-local_file="winPEASany.exe"
-check_and_download_file "$api_url" "$file" "$local_file"
+# Downloading pspy64
+api_file_check_and_download_file "https://api.github.com/repos/DominicBreuker/pspy/releases/latest" "pspy64" "pspy64"
 
+# Downloading kerbrute_linux_amd64
+api_file_check_and_download_file "https://api.github.com/repos/ropnop/kerbrute/releases/latest" "kerbrute_linux_amd64" "kerbrute_linux_amd64"
 
-#Downloading Linpeas.sh
-# GitHub API URL for the latest release
-api_url="https://api.github.com/repos/peass-ng/PEASS-ng/releases"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | head -1 | awk '{print $2}' | awk -F "/" '{print $8}')
-file="https://github.com/peass-ng/PEASS-ng/releases/download/$latest/linpeas.sh"
-local_file="linpeas.sh"
-check_and_download_file "$api_url" "$file" "$local_file"
-
-
-#Downloadning pspy32
-# GitHub API URL for the latest release
-api_url="https://api.github.com/repos/DominicBreuker/pspy/releases/latest"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
-file="https://github.com/DominicBreuker/pspy/releases/download/$latest/pspy32"
-local_file="pspy32"
-check_and_download_file "$api_url" "$file" "$local_file"
-
-
-#Downloading pspy64
-# GitHub API URL for the latest release
-api_url="https://api.github.com/repos/DominicBreuker/pspy/releases/latest"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
-file="https://github.com/DominicBreuker/pspy/releases/download/$latest/pspy64"
-local_file="pspy64"
-check_and_download_file "$api_url" "$file" "$local_file"
-
-
-#Downloading Kerbrute
-# GitHub API URL for the latest release
-api_url="https://api.github.com/repos/ropnop/kerbrute/releases/latest"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
-file="https://github.com/ropnop/kerbrute/releases/download/$latest/kerbrute_linux_amd64"
-local_file="kerbrute_linux_amd64"
-check_and_download_file "$api_url" "$file" "$local_file"
-
-
-#Downloading Kerbrute
-# GitHub API URL for the latest release
-api_url="https://api.github.com/repos/ropnop/kerbrute/releases/latest"
-latest=$(curl -s $api_url | grep -i 'browser_download_url' | tail -1 | awk '{print $2}' | awk -F "/" '{print $8}')
-file="https://github.com/ropnop/kerbrute/releases/download/$latest/kerbrute_windows_amd64.exe"
-local_file="kerbrute_windows_amd64.exe"
-check_and_download_file "$api_url" "$file" "$local_file"
+# Downloading kerbrute_windows_amd64.ex
+api_file_check_and_download_file "https://api.github.com/repos/ropnop/kerbrute/releases/latest" "kerbrute_windows_amd64.exe" "kerbrute_windows_amd64.exe"
 
 
 #####################################################################################################################
-#Single files
+# Single files
 #####################################################################################################################
-
 
 #Downloading powercat.ps1
-download_url="https://github.com/besimorhino/powercat/raw/master/powercat.ps1"
-local_file="powercat.ps1"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/besimorhino/powercat/raw/master/powercat.ps1" "powercat.ps1"
 
 
 #Downloading Invoke-Mimikatz.ps1
-download_url="https://github.com/clymb3r/PowerShell/raw/master/Invoke-Mimikatz/Invoke-Mimikatz.ps1"
-local_file="Invoke-Mimikatz.ps1"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/clymb3r/PowerShell/raw/master/Invoke-Mimikatz/Invoke-Mimikatz.ps1" "Invoke-Mimikatz.ps1"
 
 
 #Downloading Powerview.ps1
-download_url="https://github.com/PowerShellMafia/PowerSploit/raw/master/Recon/PowerView.ps1"
-local_file="PowerView.ps1"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/PowerShellMafia/PowerSploit/raw/master/Recon/PowerView.ps1" "PowerView.ps1"
     
 
 #Downloading PowerUp.ps1
-download_url="https://github.com/PowerShellMafia/PowerSploit/raw/master/Privesc/PowerUp.ps1"
-local_file="PowerUp.ps1"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/PowerShellMafia/PowerSploit/raw/master/Privesc/PowerUp.ps1" "PowerUp.ps1"
 
 
 #Downloading Rubeus.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/Rubeus.exe"
-local_file="Rubeus.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/Rubeus.exe" "Rubeus.exe"
 
 
 #Downloading Invegih.ps1
-download_url="https://github.com/Kevin-Robertson/Inveigh/raw/master/Inveigh.ps1"
-local_file="Inveigh.ps1"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Kevin-Robertson/Inveigh/raw/master/Inveigh.ps1" "Inveigh.ps1"
 
 
 #Downloading nc64.exe
-download_url="https://github.com/int0x33/nc.exe/raw/master/nc64.exe"
-local_file="nc64.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/int0x33/nc.exe/raw/master/nc64.exe" "nc64.exe"
 
 
 #Downloading nc.exe
-download_url="https://github.com/int0x33/nc.exe/raw/master/nc.exe"
-local_file="nc.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/int0x33/nc.exe/raw/master/nc.exe" "nc.exe"
 
 
 #Downloading PlumHound.py
-download_url="https://github.com/PlumHound/PlumHound/raw/master/PlumHound.py"
-local_file="PlumHound.py"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/PlumHound/PlumHound/raw/master/PlumHound.py" "PlumHound.py"
 
 
 #Downloading Linux Exploit Suggester
-download_url="https://github.com/The-Z-Labs/linux-exploit-suggester/raw/master/linux-exploit-suggester.sh"
-local_file="linux-exploit-suggester.sh"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/The-Z-Labs/linux-exploit-suggester/raw/master/linux-exploit-suggester.sh" "linux-exploit-suggester.sh"
 
 
 #Downloading Linux PrivChecker
-download_url="https://github.com/sleventyeleven/linuxprivchecker/raw/master/linuxprivchecker.py"
-local_file="linuxprivchecker.py"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/sleventyeleven/linuxprivchecker/raw/master/linuxprivchecker.py" "linuxprivchecker.py"
 
 
 #Downloading LinEmnum.sh
-download_url="https://github.com/rebootuser/LinEnum/raw/master/LinEnum.sh"
-local_file="LinEnum.sh"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/rebootuser/LinEnum/raw/master/LinEnum.sh" "LinEnum.sh"
 
 
 #Downloading Whisker.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/Whisker.exe"
-local_file="Whisker.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/Whisker.exe" "Whisker.exe"
 
 
 #Downloading SharpMapExec.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/SharpMapExec.exe"
-local_file="SharpMapExec.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/SharpMapExec.exe" "SharpMapExec.exe"
 
 
 #Downloading SharpChisel.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/SharpChisel.exe"
-local_file="SharpChisel.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/SharpChisel.exe" "SharpChisel.exe"
 
 
 #Downloading Seatbelt.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/Seatbelt.exe"
-local_file="Seatbelt.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/Seatbelt.exe" "Seatbelt.exe"
 
 
 #Downloading ADCSPwn.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/ADCSPwn.exe"
-local_file="ADCSPwn.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/ADCSPwn.exe" "ADCSPwn.exe"
 
 
 #Downloading BetterSafetyKatz.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/BetterSafetyKatz.exe"
-local_file="BetterSafetyKatz.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/BetterSafetyKatz.exe" "BetterSafetyKatz.exe"
 
 
 #Downloading PassTheCert.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/PassTheCert.exe"
-local_file="PassTheCert.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_Any/PassTheCert.exe" "PassTheCert.exe"
 
 
 #Downloading SharPersist.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_x64/SharPersist.exe"
-local_file="SharPersist.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_x64/SharPersist.exe" "SharPersist.exe"
 
 
 #Downloading MailSniper.ps1
-download_url="https://github.com/dafthack/MailSniper/raw/master/MailSniper.ps1"
-local_file="MailSniper.ps1"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/dafthack/MailSniper/raw/master/MailSniper.ps1" "MailSniper.ps1"
 
 
 #Downloading ADSearch.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_x64/ADSearch.exe"
-local_file="ADSearch.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_x64/ADSearch.exe" "ADSearch.exe"
 
 
 #Downloading Invoke-DCOM.ps1
-download_url="https://github.com/EmpireProject/Empire/raw/master/data/module_source/lateral_movement/Invoke-DCOM.ps1"
-local_file="Invoke-DCOM.ps1"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/EmpireProject/Empire/raw/master/data/module_source/lateral_movement/Invoke-DCOM.ps1" "Invoke-DCOM.ps1"
 
 
 #Downloading PowerUpSQL.ps1
-download_url="https://github.com/NetSPI/PowerUpSQL/raw/master/PowerUpSQL.ps1"
-local_file="PowerUpSQL.ps1"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/NetSPI/PowerUpSQL/raw/master/PowerUpSQL.ps1" "PowerUpSQL.ps1"
 
 
 #Downloading SharpSCCM.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_x64/SharpSCCM.exe"
-local_file="SharpSCCM.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_x64/SharpSCCM.exe" "SharpSCCM.exe"
 
 
 #Downloading LAPSToolkit.ps1
-download_url="https://github.com/leoloobeek/LAPSToolkit/raw/master/LAPSToolkit.ps1"
-local_file="LAPSToolkit.ps1"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/leoloobeek/LAPSToolkit/raw/master/LAPSToolkit.ps1" "LAPSToolkit.ps1"
+
 
 #Downloading Certify.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.5_Any/Certify.exe"
-local_file="Certify.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/blob/master/NetFramework_4.5_Any/Certify.exe" "Certify.exe"
 
 
 #Downloading Inveigh.exe
-download_url="https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.5_Any/Inveigh.exe"
-local_file="Inveigh.exe"
-single_file_check_and_download_file "$download_url" "$local_file"
-
-
-#Downloading RunasCs.exe (from zip release)
-if [[ ! -f "RunasCs.exe" ]]; then
-    printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Downloading:" "RunasCs.exe"
-    local runascs_version
-    runascs_version=$(curl -s https://api.github.com/repos/antonioCoco/RunasCs/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
-    if [[ -n "$runascs_version" ]]; then
-        wget -q "https://github.com/antonioCoco/RunasCs/releases/download/${runascs_version}/RunasCs.zip" -O RunasCs.zip 2>/dev/null
-        if [[ -f "RunasCs.zip" ]]; then
-            unzip -o RunasCs.zip >/dev/null 2>&1
-            rm -f RunasCs.zip 2>/dev/null
-        fi
-    fi
-else
-    echo -e "${GREEN}[OK]${NC}   File exists: ${YELLOW}RunasCs.exe${NC}"
-fi
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/blob/master/NetFramework_4.5_Any/Inveigh.exe" "Inveigh.exe"
 
 
 #Downloading Invoke-RunasCs.ps1
-download_url="https://github.com/antonioCoco/RunasCs/raw/master/Invoke-RunasCs.ps1"
-local_file="Invoke-RunasCs.ps1"
-single_file_check_and_download_file "$download_url" "$local_file"
+single_file_check_and_download_file "https://github.com/antonioCoco/RunasCs/raw/refs/heads/master/Invoke-RunasCs.ps1" "Invoke-RunasCs.ps1"
 
 
-#####################################################################################################################
-# Zip files and git repositories
-#####################################################################################################################
+#Downloading Snaffler.exe
+single_file_check_and_download_file "https://github.com/Flangvik/SharpCollection/blob/master/NetFramework_4.7_Any/Snaffler.exe" "Snaffler.exe"
 
-    # Downloading Microsoft Sysinternals PSTools
-    local_file="PSTools"
-    if [[ ! -d "$local_file" ]]; then
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Downloading:" "$local_file"
-        if wget -q "https://download.sysinternals.com/files/PSTools.zip" -O PSTools.zip 2>/dev/null; then
-            unzip -q PSTools.zip -d PSTools 2>/dev/null
-            rm -f PSTools.zip 2>/dev/null
-        else
-            echo -e "${RED}[WAR]${NC} Failed to download ${YELLOW}$local_file${NC}"
-        fi
-    else
-        echo -e "${GREEN}[OK]${NC}   Directory exists: ${YELLOW}$local_file${NC}"
-    fi
-
-
-    # Downloading AutoRecon and installing requirements
-    local_file="AutoRecon"
-    if [[ ! -d "$local_file" ]]; then
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Downloading:" "$local_file"
-        if git clone --quiet "https://github.com/Tib3rius/AutoRecon.git" 2>/dev/null; then
-            pip3 install -q -r AutoRecon/requirements.txt 2>/dev/null
-        else
-            echo -e "${RED}[WAR]${NC} Failed to clone ${YELLOW}$local_file${NC}"
-        fi
-    else
-        echo -e "${GREEN}[OK]${NC}   Directory exists: ${YELLOW}$local_file${NC}"
-    fi
-
-
-    # Downloading PassTheCert
-    local_file="passthecert.py"
-    if [[ ! -f "$local_file" ]]; then
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Downloading:" "$local_file"
-        if git clone --quiet "https://github.com/AlmondOffSec/PassTheCert.git" 2>/dev/null; then
-            cp PassTheCert/Python/passthecert.py . 2>/dev/null
-        else
-            echo -e "${RED}[WAR]${NC} Failed to clone ${YELLOW}PassTheCert${NC}"
-        fi
-    else
-        echo -e "${GREEN}[OK]${NC}   File exists: ${YELLOW}$local_file${NC}"
-    fi
-
-
-    # Downloading PetitPotam
-    local_file="PetitPotam.py"
-    if [[ ! -f "$local_file" ]]; then
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Downloading:" "$local_file"
-        if git clone --quiet "https://github.com/topotam/PetitPotam.git" 2>/dev/null; then
-            cp PetitPotam/PetitPotam.py . 2>/dev/null
-        else
-            echo -e "${RED}[WAR]${NC} Failed to clone ${YELLOW}PetitPotam${NC}"
-        fi
-    else
-        echo -e "${GREEN}[OK]${NC}   File exists: ${YELLOW}$local_file${NC}"
-    fi
-
-
-    # Downloading SprayingToolkit
-    local_file="SprayingToolkit"
-    if [[ ! -d "$local_file" ]]; then
-        printf "${YELLOW}[INFO]${NC} %-15s %s\n" "Downloading:" "$local_file"
-        if ! git clone --quiet "https://github.com/byt3bl33d3r/SprayingToolkit.git" 2>/dev/null; then
-            echo -e "${RED}[WAR]${NC} Failed to clone ${YELLOW}$local_file${NC}"
-        fi
-    else
-        echo -e "${GREEN}[OK]${NC}   Directory exists: ${YELLOW}$local_file${NC}"
-    fi
 
 
 #####################################################################################################################
-# Cleanup and house keeping
+# GIT Download
 #####################################################################################################################
-    echo -e "${BLUE}[INFO]${NC} Performing cleanup..."
 
-    # Extract mimikatz if needed
-    if [[ ! -f "mimikatz.exe" ]] && ls mimikatz*.zip 1>/dev/null 2>&1; then
-        unzip -o mimikatz*.zip -d mimikatz_temp >/dev/null 2>&1
-        cp mimikatz_temp/x64/mimikatz.exe . 2>/dev/null
-        rm -rf mimikatz_temp mimikatz*.zip 2>/dev/null
-    fi
+#Downloading AutoRecon
+git_download "https://github.com/Tib3rius/AutoRecon.git" "AutoRecon"
 
-    # Extract SharpHound if needed
-    if [[ ! -f "SharpHound.exe" ]] && ls SharpHound*.zip 1>/dev/null 2>&1; then
-        unzip -o SharpHound*.zip >/dev/null 2>&1
-        rm -f SharpHound*.zip 2>/dev/null
-    fi
+#Downloading PassTheCert
+git_download "https://github.com/AlmondOffSec/PassTheCert.git" "PassTheCert"
 
-    # Clean up temporary files
-    rm -f *.zip *.config *.dll *.pdb *.txt *.chm *.idl *.yar 2>/dev/null
-    rm -rf x64 Win32 2>/dev/null
-    rm -rf PassTheCert PetitPotam 2>/dev/null
+#Downloading PetitPotam
+git_download "https://github.com/topotam/PetitPotam.git" "PetitPotam"
 
-    # Copy kerbrute to /usr/local/bin if it exists
-    if [[ -f "kerbrute_linux_amd64" ]]; then
-        sudo cp kerbrute_linux_amd64 /usr/local/bin/kerbrute_linux 2>/dev/null
-        sudo chmod +x /usr/local/bin/kerbrute_linux 2>/dev/null
-    fi
+#Downloading SprayingToolkit
+git_download "https://github.com/byt3bl33d3r/SprayingToolkit.git" "SprayingToolkit"
 
-    # Change owner of the toolsdir
-    if [[ "$(stat -c '%U' "${toolsdir}")" != "${user_name}" ]]; then
-        chown -R "${user_name}:${user_name}" "${toolsdir}" 2>/dev/null
-    fi
+#Downloading BloodHound.py for Community Edition Bloodhound (CE)
+git_download "https://github.com/dirkjanm/BloodHound.py.git" "bloodhound.py"
 
-    # Move back to the directory where the script was run from
-    cd "${startdir}" || true
-    echo -e "${BLUE}[COMPLETE]${NC}"
-    echo ""
+
+#####################################################################################################################
+# ZIP folder Download
+#####################################################################################################################
+
+#Downloading Microsoft sysinternal PSTools
+folder_zip_download "https://download.sysinternals.com/files/PSTools.zip" "PSTools.zip" "PSTools"
+
+#Downloading Mimikatz
+folder_zip_download "https://github.com/gentilkiwi/mimikatz/releases/download/2.2.0-20220919/mimikatz_trunk.zip" "mimikatz_trunk.zip" "mimikatz"
+
+
+#####################################################################################################################
+# ZIP or gz single file Download
+#####################################################################################################################
+
+#Downloading RunasCs.exe
+single_file_zip_gz "https://github.com/antonioCoco/RunasCs/releases/download/v1.5/RunasCs.zip" "RunasCS.zip"
+
+#Downloading chisel
+single_file_zip_gz "https://github.com/jpillora/chisel/releases/download/v1.10.1/chisel_1.10.1_linux_amd64.gz" "chisel_1.10.1_linux_amd64.gz"
+
+
+
+# Clean up
+perform_cleanup
+
 }
 
 
 #####################################################################################################################
 # Download obfuscated versions
 #####################################################################################################################
+obfuscated_scripts() {
+    # Default base directory
+    toolsdir="/opt/tools"
 
-download_obfuscated_scripts() {
+    echo -e "${YELLOW}[INFO]${NC} Choose download directory. An ${BLUE}[Obfuscated]${NC} folder will be created here"
+    read -p "$(echo -e "${YELLOW}[INFO]${NC} Enter the directory to use, or hit ENTER for default: ${YELLOW}[${toolsdir}]${NC}: ")" userdir
+    [[ -n "$userdir" ]] && toolsdir="$userdir"
 
-    obftoolsdir="${toolsdir}/obfuscated"
-    # Prompt the user for a custom directory
-    echo -e "${YELLOW}[INFO]${NC} Choose directory to download Script to. Example: ${BLUE}[${obftoolsdir}]${NC}"
-    read -p "$(echo -e "${YELLOW}[INFO]${NC} Enter the directory to use, hit ENTER for default: ${YELLOW}[${obftoolsdir}]${NC}: ")" userdir
-
-    # If user provides input, use it as the tools directory
-    if [[ -n "$userdir" ]]; then
-        obftoolsdir="$userdir"
-    fi
-
-    # Check if directory exists
-    if [[ -d "$obftoolsdir" ]]; then
-        echo -e "${YELLOW}[INFO]${NC} Using directory: [${BLUE}${obftoolsdir}${NC}]"
-    else
-        if ! mkdir -p "$obftoolsdir" 2>/dev/null; then
-            echo ""
-            echo -e "${RED}[WAR]${NC} You don't have access to create folders in [${BLUE}${obftoolsdir}${NC}]. Rerun the script with sudo."
+    # Just ensure the directory exists
+    if [[ ! -d "$toolsdir" ]]; then
+        mkdir -p "$toolsdir" >/dev/null 2>&1 || {
+            echo -e "${RED}[WAR]${NC} Cannot create directory: ${RED}[${toolsdir}]${NC}"
             exit 1
-        else
-            echo -e "${YELLOW}[INFO]${NC} Created directory: [${BLUE}${obftoolsdir}${NC}]"
-        fi
+        }
+        echo -e "${YELLOW}[INFO]${NC} Created directory: ${BLUE}[${toolsdir}/obfuscated]${NC}"
+    else
+        echo -e "${YELLOW}[INFO]${NC} Using directory: ${BLUE}[${toolsdir}/obfuscated]${NC}"
     fi
 
-    cd "${obftoolsdir}" || { echo -e "${RED}[WAR]${NC} Cannot access directory: $obftoolsdir"; return 1; }
-    echo ""
-    echo -e "${YELLOW}[INFO]${NC} Downloading Obfuscated scripts from [https://github.com/Flangvik/ObfuscatedSharpCollection]"
-    echo ""
 
-    # Downloading Certify.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/Certify.exe._obf.exe"
-    local_file="Certify.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
+# Downloading Certify.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/Certify.exe._obf.exe" "Certify.exe._obf.exe"
 
+# Downloading Rubeus.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/Rubeus.exe._obf.exe" "Rubeus.exe._obf.exe"
 
-    # Downloading Rubeus.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/Rubeus.exe._obf.exe"
-    local_file="Rubeus.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
+# Downloading Seatbelt.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/Seatbelt.exe._obf.exe" "Seatbelt.exe._obf.exe"
 
+# Downloading SharpEDRChecker.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/SharpEDRChecker.exe._obf.exe" "SharpEDRChecker.exe._obf.exe"
 
-    # Downloading Seatbelt.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/Seatbelt.exe._obf.exe"
-    local_file="Seatbelt.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
+# Downloading SharpHound.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/SharpHound.exe._obf.exe" "SharpHound.exe._obf.exe"
 
+# Downloading SharpSCCM.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/SharpSCCM.exe._obf.exe" "SharpSCCM.exe._obf.exe"
 
-    # Downloading SharpEDRChecker.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/SharpEDRChecker.exe._obf.exe"
-    local_file="SharpEDRChecker.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
+# Downloading SharpView.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/SharpView.exe._obf.exe" "SharpView.exe._obf.exe"
 
+# Downloading Snaffler.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/Snaffler.exe._obf.exe" "Snaffler.exe._obf.exe"
 
-    # Downloading SharpHound.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/SharpHound.exe._obf.exe"
-    local_file="SharpHound.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
+# Downloading StickyNotesExtract.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/StickyNotesExtract.exe._obf.exe" "StickyNotesExtract.exe._obf.exe"
 
+# Downloading Whisker.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/Whisker.exe._obf.exe" "Whisker.exe._obf.exe"
 
-    # Downloading SharpSCCM.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/SharpSCCM.exe._obf.exe"
-    local_file="SharpSCCM.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
+# Downloading winPEAS.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/winPEAS.exe._obf.exe" "winPEAS.exe._obf.exe"
 
+# Downloading SharpWebServer.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/SharpWebServer.exe._obf.exe" "SharpWebServer.exe._obf.exe"
 
-    # Downloading SharpView.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/SharpView.exe._obf.exe"
-    local_file="SharpView.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
+# Downloading SharpNoPSExec.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/SharpNoPSExec.exe._obf.exe" "SharpNoPSExec.exe._obf.exe"
 
+# Downloading SharpMapExec.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/SharpMapExec.exe._obf.exe" "SharpMapExec.exe._obf.exe"
 
-    # Downloading Snaffler.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/Snaffler.exe._obf.exe"
-    local_file="Snaffler.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
+# Downloading SharpKatz.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/SharpKatz.exe._obf.exe" "SharpKatz.exe._obf.exe"
 
+# Downloading ADCSPwn.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/ADCSPwn.exe._obf.exe" "ADCSPwn.exe._obf.exe"
 
-    # Downloading StickyNotesExtract.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/StickyNotesExtract.exe._obf.exe"
-    local_file="StickyNotesExtract.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
+# Downloading ADCollector.exe._obf.exe
+download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/ADCollector.exe._obf.exe" "ADCollector.exe._obf.exe"
 
+echo ""
+echo -e ${BLUE}"[COMPLETE]"${NC}
+echo ""
 
-    # Downloading Whisker.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/Whisker.exe._obf.exe"
-    local_file="Whisker.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
-
-
-    # Downloading winPEAS.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/winPEAS.exe._obf.exe"
-    local_file="winPEAS.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
-
-
-    # Downloading SharpWebServer.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/SharpWebServer.exe._obf.exe"
-    local_file="SharpWebServer.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
-
-
-    # Downloading SharpNoPSExec.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/SharpNoPSExec.exe._obf.exe"
-    local_file="SharpNoPSExec.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
-
-
-    # Downloading SharpMapExec.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/SharpMapExec.exe._obf.exe"
-    local_file="SharpMapExec.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
-
-
-    # Downloading SharpKatz.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/SharpKatz.exe._obf.exe"
-    local_file="SharpKatz.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
-
-
-    # Downloading ADCSPwn.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/ADCSPwn.exe._obf.exe"
-    local_file="ADCSPwn.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
-
-
-    # Downloading ADCollector.exe._obf.exe
-    download_url="https://github.com/Flangvik/ObfuscatedSharpCollection/raw/main/NetFramework_4.7_Any/ADCollector.exe._obf.exe"
-    local_file="ADCollector.exe._obf.exe"
-    single_file_check_and_download_file "$download_url" "$local_file"
-
-
-    # Change owner of the toolsdir
-    if [[ "$(stat -c '%U' "${obftoolsdir}")" != "${user_name}" ]]; then
-        chown -R "${user_name}:${user_name}" "${obftoolsdir}" 2>/dev/null
-    fi
-
-    # Move back to the directory where the script was run from
-    cd "${startdir}" || true
-    echo -e "${BLUE}[COMPLETE]${NC}"
-    echo ""
 }
 
 
 ###################################################################################################################
-# Function for installing custom webserver from the tools directory and adding a simple function for extracting ports
-# from rustscan output. Adding alias for batcat
+#Function for instaling custom websever from the tools directory and adding a simple function for extracting ports
+# from rustscan output. adding alias for batcat
 ###################################################################################################################
 add_custom_functions() {
     echo -e "${YELLOW}[INFO]${NC} Adding functions to the .zshrc file"
     echo ""
-
-    # Check if zshrc file exists
-    if [[ ! -f "$zshrc_file" ]]; then
-        echo -e "${RED}[WAR]${NC} File $zshrc_file does not exist. Creating it..."
-        touch "$zshrc_file" 2>/dev/null
-    fi
-
     # Custom HTTP server from the tools directory
-    if grep -q 'servtools()' "$zshrc_file" 2>/dev/null; then
-        echo -e "${GREEN}[OK]${NC}   servtools already installed"
-        echo -e "${YELLOW}[INFO]${NC} To use this server, reopen terminal and type ${BLUE}servtools <port>${NC}"
+    # Adding custom server to server tools to ~/.bashrc
+    if [[ $(cat "$zshrc_file" | grep -o 'servtools()') == 'servtools()' ]]; then
+        echo -e "${GREEN}[OK]${NC} servtools already installed"
+        echo -e "${YELLOW}[INFO]${NC} To use this server, reopen terminal and type ${BLUE}servtools <port>"
         echo ""
     else
-        echo -e "${YELLOW}[INFO]${NC} Adding a custom server for starting HTTP server from ${toolsdir} directory"
-        echo -e "${YELLOW}[INFO]${NC} Adding servtools to ${user_home}/.zshrc file"
-        cat >> "$zshrc_file" 2>/dev/null << 'SERVTOOLS_EOF'
+        echo -e "${YELLOW}[!] Adding a custom server for starting HTTP server from ${toolsdir} directory"
+        echo -e "${YELLOW}[!] Adding servtools to ${user_home}/.zshrc file}"
+        echo "" >> "$zshrc_file" 2>/dev/null
+        echo "" >> "$zshrc_file" 2>/dev/null
+        echo "" >> "$zshrc_file" 2>/dev/null
+        echo "" >> "$zshrc_file" 2>/dev/null
+        echo "# My personal configuration" >> "$zshrc_file" 2>/dev/null
+        echo "" >> "$zshrc_file" 2>/dev/null
+        echo "# Http server function which starts an http server from the /tools folder" >> "$zshrc_file" 2>/dev/null
+        echo "# Call this function using servtools <port> [--obf]" >> "$zshrc_file" 2>/dev/null
+        echo "servtools() {" >> "$zshrc_file" 2>/dev/null
+        echo '    GREEN="\e[32m"' >> "$zshrc_file" 2>/dev/null
+        echo '    NC="\e[0m"' >> "$zshrc_file" 2>/dev/null
+        echo "    PORT=\$1" >> "$zshrc_file" 2>/dev/null
+        echo "    if [[ \$2 == '--obf' ]]; then" >> "$zshrc_file" 2>/dev/null
+        echo '        DIR="'${toolsdir}'/obfuscated"' >> "$zshrc_file" 2>/dev/null
+        echo "    else" >> "$zshrc_file" 2>/dev/null
+        echo '        DIR="'${toolsdir}'"' >> "$zshrc_file" 2>/dev/null
+        echo "    fi" >> "$zshrc_file" 2>/dev/null
+        echo "    IP=\$(ip -4 addr show tun0 | grep -oP \"(?<=inet ).*(?=/)\")" >> "$zshrc_file" 2>/dev/null
+        echo '    echo -e "${GREEN}Files in directory ${BLUE}[${DIR}]${NC}"' >> "$zshrc_file" 2>/dev/null
+        echo '    ls ${DIR}' >> "$zshrc_file" 2>/dev/null
+        echo '    echo -e "${GREEN}-------------------------------------------------------------------------${NC}"' >> "$zshrc_file" 2>/dev/null
+        echo "    echo -e \"[OK] Starting HTTP server from \${GREEN}[\$DIR]\${NC} on \$PORT\"" >> "$zshrc_file" 2>/dev/null
+        echo "    echo -e \"[OK] Address: http://\$IP:\$PORT/\"" >> "$zshrc_file" 2>/dev/null
+        echo "    python3 -m http.server \$PORT --directory \$DIR" >> "$zshrc_file" 2>/dev/null
+        echo '}' >> "$zshrc_file" 2>/dev/null
+        echo "" >> "$zshrc_file" 2>/dev/null
+        echo "" >> "$zshrc_file" 2>/dev/null
 
-
-# My personal configuration
-
-# Http server function which starts an http server from the /tools folder
-# Call this function using servtools <port> [--obf]
-servtools() {
-    GREEN="\e[32m"
-    BLUE="\e[34m"
-    NC="\e[0m"
-    PORT=$1
-    if [[ $2 == '--obf' ]]; then
-SERVTOOLS_EOF
-        echo "        DIR=\"${toolsdir}/obfuscated\"" >> "$zshrc_file" 2>/dev/null
-        cat >> "$zshrc_file" 2>/dev/null << 'SERVTOOLS_EOF2'
-    else
-SERVTOOLS_EOF2
-        echo "        DIR=\"${toolsdir}\"" >> "$zshrc_file" 2>/dev/null
-        cat >> "$zshrc_file" 2>/dev/null << 'SERVTOOLS_EOF3'
-    fi
-    IP=$(ip -4 addr show tun0 2>/dev/null | grep -oP "(?<=inet ).*(?=/)" || echo "127.0.0.1")
-    echo -e "${GREEN}Files in directory ${BLUE}[${DIR}]${NC}"
-    ls "${DIR}"
-    echo -e "${GREEN}-------------------------------------------------------------------------${NC}"
-    echo -e "[OK] Starting HTTP server from ${GREEN}[${DIR}]${NC} on ${PORT}"
-    echo -e "[OK] Address: http://${IP}:${PORT}/"
-    python3 -m http.server "$PORT" --directory "$DIR"
-}
-
-SERVTOOLS_EOF3
-
-        echo -e "${YELLOW}[INFO]${NC} To use this server, reopen the terminal and type ${BLUE}servtools <port> [--obf]${NC}"
+        echo -e "${YELLOW}[INFO]${NC} To use this server, reopen the terminal and type ${BLUE}servtools <port> [--obf]"
         echo ""
+        source "$zshrc_file" 2>/dev/null
     fi
 
 
     # Add alias for batcat
-    if grep -q 'alias cat=' "$zshrc_file" 2>/dev/null; then
-        echo -e "${GREEN}[OK]${NC}   Alias for batcat is already added."
-    else
-        echo -e "${YELLOW}[INFO]${NC} Adding alias for batcat to ${user_home}/.zshrc file"
-        cat >> "$zshrc_file" 2>/dev/null << 'EOF'
-# Better cat (batcat)
-alias cat='batcat'
-EOF
-    fi
+    #if [[ $(cat "$zshrc_file" | grep -o 'alias cat') == 'alias cat' ]]; then
+    #    echo -e "${GREEN}[OK]${NC} Alias for batcat is already added."
+    #else
+    #    echo -e "${YELLOW}[INFO]${NC} Adding alias for batcat to ${user_home}/.zshrc file}"
+    #    echo "# Better cat (batcat)" >> "$zshrc_file" 2>/dev/null
+    #    echo "alias cat='batcat'" >> "$zshrc_file" 2>/dev/null
+        source "$zshrc_file" 2>/dev/null
+    #fi
 
-    # Add Function to extract ports as a comma-separated list
-    if grep -q 'extract_ports()' "$zshrc_file" 2>/dev/null; then
-        echo -e "${GREEN}[OK]${NC}   Function to extract ports is already installed"
+# Add Function to extract ports as a comma-separated list
+    if [[ $(grep -o 'extract_ports()' "$zshrc_file") == 'extract_ports()' ]]; then
+        echo -e "${GREEN}[OK]${NC} Function to extract ports is already installed"
         echo -e "${YELLOW}[INFO]${NC} To use it, reopen terminal and type ${BLUE}extract_ports <file.txt>${NC}"
     else
+        echo "" >> "$zshrc_file" 2>/dev/null
+        echo "" >> "$zshrc_file" 2>/dev/null
         echo -e "${YELLOW}[INFO]${NC} Adding the function extract_ports to ${zshrc_file}"
-        cat >> "$zshrc_file" 2>/dev/null << 'EOF'
-
-# Function to extract ports as a comma-separated list
-extract_ports() {
-    if [[ -z "$1" ]]; then
-        echo "Usage: extract_ports <filename>"
-        return 1
-    fi
-    awk '{print $1}' "$1" | grep -o '^[0-9]*' | paste -sd,
-}
-EOF
+        echo "# Function to extract ports as a comma-separated list" >> "$zshrc_file" 2>/dev/null
+        echo "extract_ports() {" >> "$zshrc_file" 2>/dev/null
+        echo '    if [[ -z "\$1" ]]; then' >> "$zshrc_file" 2>/dev/null
+        echo '        echo "Usage: extract_ports <filename>"' >> "$zshrc_file" 2>/dev/null
+        echo '        return 1' >> "$zshrc_file" 2>/dev/null
+        echo '    fi' >> "$zshrc_file" 2>/dev/null
+        echo "    awk '{print \$1}' \"\$1\" | grep -o '^[0-9]*' | paste -sd," >> "$zshrc_file" 2>/dev/null
+        echo "}" >> "$zshrc_file" 2>/dev/null
+        echo "" >> "$zshrc_file" 2>/dev/null
         echo -e "${YELLOW}[INFO]${NC} Function extract_ports added successfully. Reopen the terminal to use it."
     fi
 
-    echo ""
-    echo -e "${BLUE}[COMPLETE]${NC}"
 }
 
 
@@ -1018,35 +973,39 @@ menu_choice() {
     echo -e "${GREEN}[1]${NC} Install Tools"
     echo -e "${GREEN}[2]${NC} Download Scripts"
     echo -e "${GREEN}[3]${NC} Download Obfuscated Scripts"
-    echo -e "${GREEN}[4]${NC} Add Custom functions"
+    echo -e "${GREEN}[4]${NC} Add Custom function"
     echo -e "${GREEN}[5]${NC} All the above"
     echo -e "${GREEN}[0]${NC} Exit"
-
-    read -p "Enter choice [0-5]: " choice
+    
+    # Prompt for input
+    printf "\r${YELLOW}[INFO]${NC} Enter choice [1-5]: [0] To Exit: "
+    read -r choice
+    
+        
     echo ""
     case $choice in
         1) install_tools ;;
         2) download_scripts ;;
-        3) download_obfuscated_scripts ;;
+        3) obfuscated_scripts ;;
         4) add_custom_functions ;;
-        5)
+        5) 
             install_tools
             download_scripts
-            download_obfuscated_scripts
+            obfuscated_scripts
             add_custom_functions
             ;;
-        0)
+        
+        0) 
             echo -e "${YELLOW}[INFO]${NC} Exiting..."
             exit 0
             ;;
-        *)
-            echo -e "${RED}[WAR]${NC} Invalid option. Please choose a number between 0-5."
-            menu_choice
+        *) 
+            echo -e "${RED}[WAR]${NC} Invalid option. Please choose a number between 0-3."
+            #menu_choice
             ;;
+
     esac
 }
-
-# Main execution
 ask_update
-get_script_dir
+ask_upgrade
 menu_choice
