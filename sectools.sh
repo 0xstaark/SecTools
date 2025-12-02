@@ -376,15 +376,34 @@ api_file_check_and_download_file() {
         local temp_zip="temp_download.zip"
         (curl -sL "$file_url" -o "$temp_zip" >/dev/null 2>&1) & spinner "$filename"
 
-        local extracted_file=$(unzip -Z1 "$temp_zip" | grep -i "$filename")
+        # Wait for download to complete
+        wait
+
+        # List zip contents and find the file (handles subdirectories)
+        local extracted_file=$(unzip -Z1 "$temp_zip" 2>/dev/null | grep -i "${filename}$" | head -1)
+
+        # If exact match not found, try partial match
+        if [[ -z "$extracted_file" ]]; then
+            extracted_file=$(unzip -Z1 "$temp_zip" 2>/dev/null | grep -i "$filename" | head -1)
+        fi
+
         if [[ -z "$extracted_file" ]]; then
             printf "\r${YELLOW}[WARNING]${NC} ${filename} not found in ZIP archive.\n"
             rm -f "$temp_zip"
             return
         fi
 
-        unzip -jo "$temp_zip" "$extracted_file" >/dev/null 2>&1
-        mv "$extracted_file" "$filename" 2>/dev/null || true
+        # Extract file (junk paths to flatten directory structure)
+        unzip -jo "$temp_zip" "$extracted_file" -d . >/dev/null 2>&1
+
+        # Get the basename in case file was in a subdirectory
+        local extracted_basename=$(basename "$extracted_file")
+
+        # Rename to target filename if different
+        if [[ "$extracted_basename" != "$filename" && -f "$extracted_basename" ]]; then
+            mv "$extracted_basename" "$filename" 2>/dev/null || true
+        fi
+
         rm -f "$temp_zip"
 
     else
@@ -526,8 +545,8 @@ install_tool() {
         #"[[ \$(which batcat) == '/usr/bin/batcat' ]]"
 
     install_tool "rustscan" \
-        "versionnr=\$(curl -s https://api.github.com/repos/RustScan/RustScan/releases | grep 'browser_download_url' | head -1 | tr -d ' ' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'); sudo wget -q -O rustscan.deb https://github.com/RustScan/RustScan/releases/download/\${versionnr}/rustscan_\${versionnr}_amd64.deb && sudo dpkg -i rustscan.deb && rm rustscan.deb" \
-        "[[ \$(which rustscan) == '/usr/bin/rustscan' ]]"
+        "deb_url=\$(curl -s https://api.github.com/repos/RustScan/RustScan/releases/latest | grep 'browser_download_url.*amd64.deb' | head -1 | awk -F '\"' '{print \$4}'); if [[ -n \"\$deb_url\" ]]; then sudo wget -q -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb && rm -f rustscan.deb; else echo 'Failed to get RustScan URL' && exit 1; fi" \
+        "[[ -x /usr/bin/rustscan ]] || command -v rustscan &>/dev/null"
 
     install_tool "wfuzz" \
         "sudo apt-get -qq -y install wfuzz" \
