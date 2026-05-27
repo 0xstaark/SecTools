@@ -90,7 +90,14 @@ spinner() {
         i=$(( (i + 1) % ${#spinstr} ))
         sleep $delay
     done
-    printf "\r${GREEN}[OK]${NC}   Downloaded   %-31s ${GREEN}[DONE]${NC}\n" "$1"
+    wait "$pid"
+    local exit_code=$?
+    if [[ $exit_code -eq 0 ]]; then
+        printf "\r${GREEN}[OK]${NC}   Downloaded   %-31s ${GREEN}[DONE]${NC}\n" "$1"
+    else
+        printf "\r${RED}[ERROR]${NC} Failed        %-31s ${RED}[FAILED]${NC}\n" "$1"
+    fi
+    return $exit_code
 }
 
 
@@ -123,6 +130,8 @@ spinner3() {
         i=$(( (i + 1) % ${#spinstr} ))
         sleep $delay
     done
+    wait "$pid"
+    return $?
 }
 
 
@@ -156,14 +165,14 @@ perform_cleanup() {
         rm -rf x64 Win32 PassTheCert PetitPotam mimikatz >/dev/null 2>&1
 
         # Adjust ownership of tools directory if needed
-        [[ $(stat -c '%U' "${toolsdir}") != "${user_name}" ]] && chown -R "${user_name}:${user_name}" "${toolsdir}" >/dev/null 2>&1
-
-        # Return to the original directory
-        cd "${startdir}"
+        if [[ -n "$toolsdir" ]]; then
+            [[ $(stat -c '%U' "${toolsdir}") != "${user_name}" ]] && chown -R "${user_name}:${user_name}" "${toolsdir}" >/dev/null 2>&1
+        fi
     } & spinner2  # Spinner runs alongside the cleanup block
 
-    # Overwrite the spinner with the final aligned message
-    wait  # Wait for the cleanup to finish
+    # Wait for cleanup to finish, then return to original directory
+    wait
+    cd "${startdir}" 2>/dev/null || true
     echo ""
     printf "\r${BLUE}[INFO]${NC} Cleanup...   %-31s ${BLUE}[COMPLETE]${NC}\n" ""
 }
@@ -186,11 +195,15 @@ ask_update() {
 
             # Run the update command in the background with a spinner
             (
-                sudo apt -q update -y >/dev/null 2>&1
+                sudo apt-get -q update >/dev/null 2>&1
             ) & spinner3 "Updating System"
 
-            # Overwrite the spinner with the [COMPLETE] message
-            printf "\r${BLUE}[INFO]${NC} Updating System                           ${BLUE}[COMPLETE]${NC}\n"
+            # Overwrite the spinner with the result message
+            if [[ $? -eq 0 ]]; then
+                printf "\r${BLUE}[INFO]${NC} Updating System                           ${BLUE}[COMPLETE]${NC}\n"
+            else
+                printf "\r${RED}[ERROR]${NC} Update failed. Check your connection.     ${RED}[FAILED]${NC}\n"
+            fi
              ;;
         [Nn]* )
             # Overwrite the prompt line with the skip message
@@ -218,11 +231,15 @@ ask_upgrade() {
 
             # Run the upgrade command in the background with the spinner
             (
-                sudo apt -q upgrade -y >/dev/null 2>&1
+                sudo apt-get -q upgrade -y >/dev/null 2>&1
             ) & spinner3 "Upgrading System"
 
-            # Overwrite the spinner line with the [COMPLETE] message
-            printf "\r${BLUE}[INFO]${NC} Upgrading System                          ${BLUE}[COMPLETE]${NC}\n"
+            # Overwrite the spinner line with the result message
+            if [[ $? -eq 0 ]]; then
+                printf "\r${BLUE}[INFO]${NC} Upgrading System                          ${BLUE}[COMPLETE]${NC}\n"
+            else
+                printf "\r${RED}[ERROR]${NC} Upgrade failed. Check your connection.    ${RED}[FAILED]${NC}\n"
+            fi
             ;;
         [Nn]* )
             echo -e "${RED}[INFO]${NC} Skipping upgrade."
@@ -263,12 +280,14 @@ git_download() {
     local repo_name="$2"
 
     if [[ -d "$repo_name" ]]; then
-        #printf "${YELLOW}[INFO]${NC} Removing existing %-31s\n" "$repo_name"
         rm -rf "$repo_name"
     fi
 
     printf "${YELLOW}[INFO]${NC} Cloning       %-31s " "$repo_name"
     (git clone "$repo_url" >/dev/null 2>&1) & spinner "$repo_name"
+    if [[ $? -ne 0 ]]; then
+        printf "${RED}[ERROR]${NC} Could not clone ${repo_name}. Skipping.\n"
+    fi
 }
 
 
@@ -287,9 +306,18 @@ folder_zip_download() {
 
     # Download the zip file (with timeout)
     (curl -sL --connect-timeout 10 --max-time 120 "$zip_url" -o "$zip_name" >/dev/null 2>&1) & spinner "$extract_dir"
+    if [[ $? -ne 0 ]]; then
+        rm -f "$zip_name"
+        printf "${RED}[ERROR]${NC} Download failed for ${extract_dir}. Skipping.\n"
+        return 1
+    fi
 
     # Extract the zip file into the specified directory
-    unzip -qo "$zip_name" -d "$extract_dir" >/dev/null 2>&1
+    if ! unzip -qo "$zip_name" -d "$extract_dir" >/dev/null 2>&1; then
+        printf "${RED}[ERROR]${NC} Extraction failed for ${extract_dir}. Skipping.\n"
+        rm -f "$zip_name"
+        return 1
+    fi
 
     # Clean up the zip file after extraction
     rm -f "$zip_name"
@@ -310,17 +338,29 @@ single_file_zip_gz() {
 
     # Download the archive file (with timeout)
     (curl -sL --connect-timeout 10 --max-time 120 "$file_url" -o "$file_name" >/dev/null 2>&1) & spinner "$file_name"
+    if [[ $? -ne 0 ]]; then
+        rm -f "$file_name"
+        printf "${RED}[ERROR]${NC} Download failed for ${file_name}. Skipping.\n"
+        return 1
+    fi
 
     # Determine file type and extract accordingly
     if [[ "$file_name" == *.gz ]]; then
         # For .gz files, extract as a single file
-        gunzip -c "$file_name" > "${file_name%.gz}"
-        #printf "\r${GREEN}[OK]${NC} Extracted ${file_name} as ${file_name%.gz}\n"
+        if ! gunzip -c "$file_name" > "${file_name%.gz}" 2>/dev/null; then
+            printf "${RED}[ERROR]${NC} Extraction failed for ${file_name}. Skipping.\n"
+            rm -f "$file_name"
+            return 1
+        fi
     elif [[ "$file_name" == *.zip ]]; then
         # For .zip files, extract the single file (assumes only one file inside)
-        local extracted_file=$(unzip -Z1 "$file_name" | head -1)
-        unzip -p "$file_name" "$extracted_file" > "${file_name%.zip}"
-        #printf "\r${GREEN}[OK]${NC} Extracted ${file_name} as ${file_name%.zip}\n"
+        local extracted_file
+        extracted_file=$(unzip -Z1 "$file_name" 2>/dev/null | head -1)
+        if ! unzip -p "$file_name" "$extracted_file" > "${file_name%.zip}" 2>/dev/null; then
+            printf "${RED}[ERROR]${NC} Extraction failed for ${file_name}. Skipping.\n"
+            rm -f "$file_name"
+            return 1
+        fi
     else
         printf "\r${YELLOW}[WARNING]${NC} Unsupported file format: ${file_name}\n"
     fi
@@ -375,9 +415,14 @@ api_file_check_and_download_file() {
     if [[ "$file_url" == *.zip ]]; then
         local temp_zip="temp_download.zip"
         (curl -sL --connect-timeout 10 --max-time 120 "$file_url" -o "$temp_zip" >/dev/null 2>&1) & spinner "$filename"
-
-        # Wait for download to complete
+        local dl_status=$?
         wait
+
+        if [[ $dl_status -ne 0 ]]; then
+            rm -f "$temp_zip"
+            printf "${RED}[ERROR]${NC} Download failed for ${filename}. Skipping.\n"
+            return 1
+        fi
 
         # List zip contents and find the file (handles subdirectories)
         local extracted_file=$(unzip -Z1 "$temp_zip" 2>/dev/null | grep -i "${filename}$" | head -1)
@@ -408,6 +453,11 @@ api_file_check_and_download_file() {
 
     else
         (curl -sL --connect-timeout 10 --max-time 120 "$file_url" -o "$filename" >/dev/null 2>&1) & spinner "$filename"
+        if [[ $? -ne 0 ]]; then
+            rm -f "$filename"
+            printf "${RED}[ERROR]${NC} Download failed for ${filename}. Skipping.\n"
+            return 1
+        fi
     fi
 }
 
@@ -424,14 +474,19 @@ single_file_check_and_download_file() {
 
     if [[ -f "$local_file" ]]; then
         # Get local file's modification time
-        local local_time=$(stat -c "%Y" "$local_file")
+        local local_time
+        local_time=$(stat -c "%Y" "$local_file")
 
-        # Compare timestamps
-        if [[ "$remote_time" -gt "$local_time" ]]; then
+        # Compare timestamps only when both values are valid integers
+        if [[ -n "$remote_time" && "$remote_time" -gt "$local_time" ]]; then
             printf "${YELLOW}[INFO]${NC} Updating      %-31s (Newer version found)\n" "$local_file"
-            rm -f "$local_file"  # Remove old file
+            rm -f "$local_file"
             printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$local_file"
             (curl -sL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$local_file"
+            if [[ $? -ne 0 ]]; then
+                rm -f "$local_file"
+                printf "${RED}[ERROR]${NC} Download failed for ${local_file}. Skipping.\n"
+            fi
         else
             printf "${BLUE}[SKIP]${NC} Found        %-31s ${BLUE}[Up-to-Date]${NC}\n" "$local_file"
         fi
@@ -439,6 +494,10 @@ single_file_check_and_download_file() {
         # If file doesn't exist, download it
         printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$local_file"
         (curl -sL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$local_file"
+        if [[ $? -ne 0 ]]; then
+            rm -f "$local_file"
+            printf "${RED}[ERROR]${NC} Download failed for ${local_file}. Skipping.\n"
+        fi
     fi
 }
 
@@ -469,6 +528,10 @@ download_obfuscated_scripts() {
     else
         printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$filename"
         (curl -sL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$filename"
+        if [[ $? -ne 0 ]]; then
+            rm -f "$local_file"
+            printf "${RED}[ERROR]${NC} Download failed for ${filename}. Skipping.\n"
+        fi
     fi
 }
 
@@ -500,7 +563,7 @@ install_tool() {
     printf "\r${YELLOW}[INFO]${NC} Processing   %-31s " "$tool_name"
 
     # Check if the tool is already installed
-    if eval "$check_command"; then
+    if eval "$check_command" >/dev/null 2>&1; then
         printf "\r${BLUE}[SKIP]${NC} Found      %-31s ${BLUE}[Installed]${NC}\n" "$tool_name"
         return
     fi
@@ -544,7 +607,7 @@ install_tool() {
     fi
 
     # Check if the tool was successfully installed
-    if eval "$check_command"; then
+    if eval "$check_command" >/dev/null 2>&1; then
         printf "\r${GREEN}[OK]${NC}     Installed  %-31s ${GREEN}[DONE]${NC}\n" "$tool_name"
     else
         printf "\r${RED}[ERROR]${NC} Failed to install %-31s ${RED}[FAILED]${NC}\n" "$tool_name"
@@ -652,7 +715,10 @@ else
 fi
 
 # Change to the tools directory
-cd "$toolsdir"
+if ! cd "$toolsdir"; then
+    echo -e "${RED}[ERROR]${NC} Failed to enter directory: ${toolsdir}"
+    exit 1
+fi
 echo -e "${GREEN}-------------------------------------------------------"
 echo -e "${GREEN}[INFO] Downloading Scripts to ${BLUE}[${toolsdir}]${NC}"
 echo -e "${GREEN}-------------------------------------------------------${NC}"
@@ -973,6 +1039,7 @@ echo ""
 # from rustscan output
 ###################################################################################################################
 add_custom_functions() {
+    toolsdir="${toolsdir:-/opt/tools}"
     echo -e "${YELLOW}[INFO]${NC} Adding functions to the .zshrc file"
     echo ""
     # Custom HTTP server from the tools directory
