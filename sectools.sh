@@ -1,728 +1,539 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# SecTools - Pentest tooling bootstrapper
+# https://github.com/0xstaark
+#
+# Installs common offensive-security tools and fetches a curated set of
+# scripts/binaries into a working directory of your choice.
 
+###############################################################################
+# Terminal capability detection
+###############################################################################
+# Colours are only emitted to an interactive terminal that supports them, and
+# NO_COLOR (https://no-color.org) is honoured.
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
+    USE_COLOR=1
+else
+    USE_COLOR=0
+fi
 
-#Colors
-GREEN="\e[32m"
-YELLOW="\e[33m"
-BLUE="\e[34m"
-RED="\e[31m"
-ORANGE="\e[93m"
-VIOLET="\e[35m"
-LIGHT_BLUE="\e[38;5;39m"
-NC="\e[0m"
+if [[ "$USE_COLOR" -eq 1 ]]; then
+    C_RESET=$'\e[0m';  C_BOLD=$'\e[1m';  C_DIM=$'\e[2m'
+    C_RED=$'\e[38;5;203m'
+    C_GREEN=$'\e[38;5;114m'
+    C_YELLOW=$'\e[38;5;222m'
+    C_CYAN=$'\e[38;5;80m'
+    C_GREY=$'\e[38;5;245m'
+else
+    C_RESET='';  C_BOLD='';  C_DIM=''
+    C_RED='';  C_GREEN='';  C_YELLOW='';  C_CYAN='';  C_GREY=''
+fi
 
-#Environment variables
-startdir=$(pwd)
-user_home=$(eval echo "~$SUDO_USER")
-zshrc_file="$user_home/.zshrc"
-user_name=${SUDO_USER:-$(whoami)}
+# Prefer Unicode glyphs when the locale looks UTF-8, otherwise fall back to ASCII.
+if [[ "${LC_ALL:-}${LC_CTYPE:-}${LANG:-}" == *[Uu][Tt][Ff]* ]]; then
+    GLYPH_OK='✔';  GLYPH_ERR='✘';  GLYPH_SKIP='•'
+    GLYPH_INFO='›'; GLYPH_WARN='!'; GLYPH_ARROW='»'; GLYPH_DOT='·'
+    SPIN_FRAMES=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+else
+    GLYPH_OK='+';  GLYPH_ERR='x';  GLYPH_SKIP='-'
+    GLYPH_INFO='>'; GLYPH_WARN='!'; GLYPH_ARROW='>'; GLYPH_DOT='-'
+    SPIN_FRAMES=('|' '/' '-' '\')
+fi
 
+# Animate the spinner only when attached to an interactive terminal.
+if [[ -t 1 && "$USE_COLOR" -eq 1 ]]; then SPIN_ANIMATE=1; else SPIN_ANIMATE=0; fi
 
-echo ""
-echo -e ${GREEN}" Created by:"
-echo -e " ${RED}   ___              _                     _     "
-echo -e " ${YELLOW}  / _ \            | |                   | |    "
-echo -e " ${ORANGE} | | | |__  __ ___ | |_  __ _  __ __ ___ | | __ "
-echo -e " ${BLUE} | | | |\ \/ // __|| __|/ _\ |/ _\ || __|| |/ / "
-echo -e " ${LIGHT_BLUE} | |_| | >  < \__ \| |_| (_| ||(_| || |  |   <  "
-echo -e " ${VIOLET}  \___/ /_/\_\|___/ \__|\__,_|\__,_||_|  |_|\_\ "
-echo ""
-echo -e "${BLUE}https://github.com/0xstaark"${NC}
-echo ""
+# Always restore the cursor on exit/interrupt (the spinner hides it).
+restore_cursor() { [[ "$SPIN_ANIMATE" -eq 1 ]] && printf '\e[?25h'; }
+trap 'restore_cursor' EXIT
+trap 'restore_cursor; echo; exit 130' INT TERM
 
+NAME_WIDTH=30                                   # width of the item column
+RULE="$(printf '%.0s─' {1..52})"
+[[ "${LC_ALL:-}${LC_CTYPE:-}${LANG:-}" == *[Uu][Tt][Ff]* ]] || RULE="$(printf '%.0s-' {1..52})"
 
-###################################################################################################################
-# Directory input with autocomplete
-###################################################################################################################
+###############################################################################
+# Environment
+###############################################################################
+startdir="$(pwd)"
+user_home="$(eval echo "~${SUDO_USER:-$USER}")"
+zshrc_file="${user_home}/.zshrc"
+user_name="${SUDO_USER:-$(whoami)}"
+LOGFILE="${startdir}/sectools.log"
+
+# Per-phase counters (reset at the start of each phase).
+STAT_OK=0; STAT_SKIP=0; STAT_FAIL=0
+reset_stats() { STAT_OK=0; STAT_SKIP=0; STAT_FAIL=0; }
+
+###############################################################################
+# Output helpers
+###############################################################################
+info()  { printf '  %s%s%s  %s\n' "$C_CYAN"   "$GLYPH_INFO" "$C_RESET" "$*"; }
+ok()    { printf '  %s%s%s  %s\n' "$C_GREEN"  "$GLYPH_OK"   "$C_RESET" "$*"; }
+warn()  { printf '  %s%s%s  %s\n' "$C_YELLOW" "$GLYPH_WARN" "$C_RESET" "$*"; }
+err()   { printf '  %s%s%s  %s\n' "$C_RED"    "$GLYPH_ERR"  "$C_RESET" "$*"; }
+rule()  { printf '  %s%s%s\n' "$C_DIM" "$RULE" "$C_RESET"; }
+
+section() {
+    printf '\n  %s%s%s %s%s%s\n' "$C_CYAN" "$GLYPH_ARROW" "$C_RESET" "$C_BOLD" "$1" "$C_RESET"
+    rule
+}
+
+# skip_line <name> [note]  - item already present / nothing to do
+skip_line() {
+    STAT_SKIP=$((STAT_SKIP + 1))
+    printf '  %s%s%s  %-*s %s%s%s\n' \
+        "$C_GREY" "$GLYPH_SKIP" "$C_RESET" "$NAME_WIDTH" "$1" "$C_GREY" "${2:-present}" "$C_RESET"
+}
+
+# summary  - print the ok / skipped / failed tally for the current phase
+summary() {
+    rule
+    printf '  %s%s %d%s   %s%s %d%s   %s%s %d%s\n\n' \
+        "$C_GREEN" "$GLYPH_OK"   "$STAT_OK"   "$C_RESET" \
+        "$C_GREY"  "$GLYPH_SKIP" "$STAT_SKIP" "$C_RESET" \
+        "$C_RED"   "$GLYPH_ERR"  "$STAT_FAIL" "$C_RESET"
+    [[ "$STAT_FAIL" -gt 0 ]] && info "Details for failures logged to ${C_BOLD}${LOGFILE}${C_RESET}"
+}
+
+log() { printf '%s  %s\n' "$(date '+%F %T')" "$*" >> "$LOGFILE" 2>/dev/null; }
+
+###############################################################################
+# Unified spinner
+#
+#   ( some_command ) & spinner "<name>" ["<action>"] ["<result>"]
+#
+#   name    : item label shown in the left column
+#   action  : verb shown while running   (default "working")
+#   result  : word shown on success      (default "done")
+#
+# Prints exactly one status line and returns the background job's exit code,
+# updating the phase counters. Must be called immediately after `... &`.
+###############################################################################
+spinner() {
+    local pid=$!
+    local name="$1"
+    local action="${2:-working}"
+    local result="${3:-done}"
+    local i=0
+
+    if [[ "$SPIN_ANIMATE" -eq 1 ]]; then
+        printf '\e[?25l'                                   # hide cursor
+        while kill -0 "$pid" 2>/dev/null; do
+            printf '\r  %s%s%s  %-*s %s%s%s' \
+                "$C_YELLOW" "${SPIN_FRAMES[i]}" "$C_RESET" \
+                "$NAME_WIDTH" "$name" "$C_DIM" "$action" "$C_RESET"
+            i=$(( (i + 1) % ${#SPIN_FRAMES[@]} ))
+            sleep 0.08
+        done
+        printf '\e[?25h'                                   # show cursor
+        printf '\r\e[K'                                    # clear the line
+    fi
+
+    wait "$pid"; local code=$?
+    if [[ $code -eq 0 ]]; then
+        STAT_OK=$((STAT_OK + 1))
+        printf '  %s%s%s  %-*s %s%s%s\n' \
+            "$C_GREEN" "$GLYPH_OK" "$C_RESET" "$NAME_WIDTH" "$name" "$C_GREEN" "$result" "$C_RESET"
+    else
+        STAT_FAIL=$((STAT_FAIL + 1))
+        printf '  %s%s%s  %-*s %s%s%s\n' \
+            "$C_RED" "$GLYPH_ERR" "$C_RESET" "$NAME_WIDTH" "$name" "$C_RED" "failed" "$C_RESET"
+    fi
+    return $code
+}
+
+###############################################################################
+# Banner
+###############################################################################
+print_banner() {
+    printf '\n%s%s' "$C_BOLD" "$C_CYAN"
+    cat <<'ART'
+      ___              _                     _
+     / _ \            | |                   | |
+    | | | |__  __ ___ | |_  __ _  __ __ ___ | | __
+    | | | |\ \/ // __|| __|/ _\ |/ _\ || __|| |/ /
+    | |_| | >  < \__ \| |_| (_| ||(_| || |  |   <
+     \___/ /_/\_\|___/ \__|\__,_|\__,_||_|  |_|\_\
+ART
+    printf '%s' "$C_RESET"
+    printf '    %sSecTools%s  %s%s offensive tooling bootstrapper%s\n' \
+        "$C_BOLD" "$C_RESET" "$C_DIM" "$GLYPH_DOT" "$C_RESET"
+    printf '    %shttps://github.com/0xstaark%s\n\n' "$C_CYAN" "$C_RESET"
+}
+
+###############################################################################
+# Directory input with tab-completion
+###############################################################################
 read_directory() {
     local prompt="$1"
     local default="$2"
     local result=""
 
-    # Enable readline completion for directories
     if [[ -n "$BASH_VERSION" ]]; then
-        # Save current completion settings
-        local old_complete=$(complete -p -D 2>/dev/null || true)
-
-        # Set up directory completion
         bind 'set show-all-if-ambiguous on' 2>/dev/null
         bind 'TAB:complete' 2>/dev/null
-
-        # Use read -e for readline support with tab completion
-        read -e -p "$prompt" result
-
-        # Restore settings
+        read -e -r -p "$prompt" result
         bind 'set show-all-if-ambiguous off' 2>/dev/null
     else
-        # Fallback for non-bash shells
-        read -p "$prompt" result
+        read -r -p "$prompt" result
     fi
 
-    # Return default if empty
-    if [[ -z "$result" ]]; then
-        echo "$default"
-    else
-        echo "$result"
+    if [[ -z "$result" ]]; then echo "$default"; else echo "$result"; fi
+}
+
+###############################################################################
+# Preflight checks
+###############################################################################
+require_dependencies() {
+    local missing=()
+    local dep
+    for dep in curl wget unzip git; do
+        command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        warn "Missing required tools: ${C_BOLD}${missing[*]}${C_RESET}"
+        if command -v apt-get >/dev/null 2>&1; then
+            info "Attempting to install them with apt-get..."
+            (sudo apt-get -qq -y install "${missing[@]}" >>"$LOGFILE" 2>&1) & spinner "dependencies" "installing" "ready"
+        else
+            err "Please install them manually and re-run this script."
+            exit 1
+        fi
     fi
 }
 
-
-###################################################################################################################
-# Check network connection
-###################################################################################################################
-
-if ! ping -c 1 8.8.8.8 &> /dev/null; then
-    echo -e "${RED}[WAR]${NC} No network connection. Exiting..."
-    exit 1
-fi
-
-
-###################################################################################################################
-# Define spinner function for Download
-###################################################################################################################
-spinner() {
-    local pid=$!  # Get the PID of the last background process
-    local delay=0.1
-    local spinstr='|/-\'
-    local i=0
-    while kill -0 "$pid" 2>/dev/null; do
-        printf "\r${YELLOW}[INFO]${NC} Downloading   %-31s [%c]" "$1" "${spinstr:i:1}"
-        i=$(( (i + 1) % ${#spinstr} ))
-        sleep $delay
-    done
-    wait "$pid"
-    local exit_code=$?
-    if [[ $exit_code -eq 0 ]]; then
-        printf "\r${GREEN}[OK]${NC}   Downloaded   %-31s ${GREEN}[DONE]${NC}\n" "$1"
-    else
-        printf "\r${RED}[ERROR]${NC} Failed        %-31s ${RED}[FAILED]${NC}\n" "$1"
+check_network() {
+    if command -v curl >/dev/null 2>&1 &&
+       curl -fsS --connect-timeout 8 --max-time 15 -o /dev/null https://api.github.com 2>/dev/null; then
+        return 0
     fi
-    return $exit_code
+    ping -c1 -W2 1.1.1.1 >/dev/null 2>&1 && return 0
+    ping -c1 -W2 8.8.8.8 >/dev/null 2>&1 && return 0
+    return 1
 }
 
-
-###################################################################################################################
-# Define spinner function for cleanup
-###################################################################################################################
-spinner2() {
-    local pid=$!  # Get the PID of the last background process
-    local delay=0.1
-    local spinstr='|/-\'
-    local i=0
-    while kill -0 "$pid" 2>/dev/null; do
-        printf "\r${BLUE}[INFO]${NC} Cleanup...                                  [%c]" "${spinstr:i:1}"
-        i=$(( (i + 1) % ${#spinstr} ))
-        sleep $delay
-    done
-}
-
-
-###################################################################################################################
-# Define spinner function for update and upgrade
-###################################################################################################################
-spinner3() {
-    local pid=$!  # Get the PID of the last background process
-    local delay=0.1
-    local spinstr='|/-\'
-    local i=0
-    while kill -0 "$pid" 2>/dev/null; do
-        printf "\r${YELLOW}[INFO]${NC} %-40s [%c]" "$1" "${spinstr:i:1}"
-        i=$(( (i + 1) % ${#spinstr} ))
-        sleep $delay
-    done
-    wait "$pid"
-    return $?
-}
-
-
-###################################################################################################################
-# Define spinner function for Tool install
-###################################################################################################################
-spinner4() {
-    local pid=$!  # Get the PID of the last background process
-    local delay=0.1
-    local spinstr='|/-\'
-    local i=0
-    while kill -0 "$pid" 2>/dev/null; do
-        printf "\r${YELLOW}[INFO]${NC} Installing   %-31s [%c]" "$1" "${spinstr:i:1}"
-        i=$(( (i + 1) % ${#spinstr} ))
-        sleep $delay
-    done
-}
-
-
-#####################################################################################################################
-# Cleanup and house keeping
-#####################################################################################################################
+###############################################################################
+# Cleanup and housekeeping
+###############################################################################
 perform_cleanup() {
-    # Start spinner and cleanup
-    printf "${BLUE}[INFO]${NC} Performing cleanup...   "
-
-    {
-        # Perform cleanup operations
+    (
         cp mimikatz/x64/mimikatz.exe . >/dev/null 2>&1
         mv RunasCS RunasCS.exe >/dev/null 2>&1
         rm -rf x64 Win32 PassTheCert PetitPotam mimikatz >/dev/null 2>&1
-
-        # Adjust ownership of tools directory if needed
-        if [[ -n "$toolsdir" ]]; then
-            [[ $(stat -c '%U' "${toolsdir}") != "${user_name}" ]] && chown -R "${user_name}:${user_name}" "${toolsdir}" >/dev/null 2>&1
+        if [[ -n "$toolsdir" && $(stat -c '%U' "$toolsdir" 2>/dev/null) != "$user_name" ]]; then
+            chown -R "${user_name}:${user_name}" "$toolsdir" >/dev/null 2>&1
         fi
-    } & spinner2  # Spinner runs alongside the cleanup block
-
-    # Wait for cleanup to finish, then return to original directory
-    wait
-    cd "${startdir}" 2>/dev/null || true
-    echo ""
-    printf "\r${BLUE}[INFO]${NC} Cleanup...   %-31s ${BLUE}[COMPLETE]${NC}\n" ""
+        true
+    ) & spinner "housekeeping" "cleaning up" "done"
+    cd "$startdir" 2>/dev/null || true
 }
 
-
-###################################################################################################################
-# Ask user if they want to update
-###################################################################################################################
+###############################################################################
+# System update / upgrade prompts
+###############################################################################
 ask_update() {
-    # Display the initial prompt
-    printf "\r${YELLOW}[INFO]${NC} Do you want to run 'sudo apt update'? (y/n): "
-    read -r choice
-
+    local choice
+    read -r -p "$(printf '  %s%s%s  Run %ssudo apt update%s now? [y/N] ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$C_RESET")" choice
     case "$choice" in
-        [Yy]* )
-            tput cuu1  # Move the cursor up one line
-            tput el    # Clear the entire line
-            # Overwrite the prompt line and show the spinner
-            printf "\r${BLUE}[INFO]${NC} Updating System                           "
-
-            # Run the update command in the background with a spinner
-            (
-                sudo apt-get -q update >/dev/null 2>&1
-            ) & spinner3 "Updating System"
-
-            # Overwrite the spinner with the result message
-            if [[ $? -eq 0 ]]; then
-                printf "\r${BLUE}[INFO]${NC} Updating System                           ${BLUE}[COMPLETE]${NC}\n"
-            else
-                printf "\r${RED}[ERROR]${NC} Update failed. Check your connection.     ${RED}[FAILED]${NC}\n"
-            fi
-             ;;
-        [Nn]* )
-            # Overwrite the prompt line with the skip message
-            printf "\r${RED}[INFO]${NC} Skipping update.                          \n"
+        [Yy]*)
+            (sudo apt-get -q update >>"$LOGFILE" 2>&1) & spinner "apt update" "refreshing package lists" "updated"
             ;;
-        * )
-            # Overwrite the prompt line with an invalid input warning
-            printf "\r${RED}[WAR]${NC} Invalid input. Please enter 'y' or 'n'.    \n"
+        *)
+            skip_line "apt update" "skipped"
             ;;
     esac
 }
 
-###################################################################################################################
-# Ask user if they want to upgrade
-###################################################################################################################
 ask_upgrade() {
-    read -p "$(echo -e "${YELLOW}[INFO]${NC} Do you want to run 'sudo apt upgrade'? (y/n): ")" choice
-
+    local choice
+    read -r -p "$(printf '  %s%s%s  Run %ssudo apt upgrade%s now? [y/N] ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$C_RESET")" choice
     case "$choice" in
-        [Yy]* )
-            tput cuu1  # Move the cursor up one line
-            tput el    # Clear the entire line
-            # Initial line with spinner
-            printf "${BLUE}[INFO]${NC} Upgrading System                "
-
-            # Run the upgrade command in the background with the spinner
-            (
-                sudo apt-get -q upgrade -y >/dev/null 2>&1
-            ) & spinner3 "Upgrading System"
-
-            # Overwrite the spinner line with the result message
-            if [[ $? -eq 0 ]]; then
-                printf "\r${BLUE}[INFO]${NC} Upgrading System                          ${BLUE}[COMPLETE]${NC}\n"
-            else
-                printf "\r${RED}[ERROR]${NC} Upgrade failed. Check your connection.    ${RED}[FAILED]${NC}\n"
-            fi
+        [Yy]*)
+            (sudo apt-get -q -y upgrade >>"$LOGFILE" 2>&1) & spinner "apt upgrade" "upgrading packages" "upgraded"
             ;;
-        [Nn]* )
-            echo -e "${RED}[INFO]${NC} Skipping upgrade."
-            ;;
-        * )
-            echo -e "${RED}[WAR]${NC} Invalid input. Please enter 'y' or 'n'."
+        *)
+            skip_line "apt upgrade" "skipped"
             ;;
     esac
 }
 
-
-###################################################################################################################
-# Error handling
-###################################################################################################################
-handle_error() {
-    local tool_name="$1"
-    local failed_command="$2"
-
-    echo -e "${RED}[ERROR]${NC} An error occurred while installing ${YELLOW}${tool_name}${NC}."
-    echo -e "${RED}[ERROR]${NC} Command: ${YELLOW}${failed_command}${NC}"
-    echo -e "${RED}[ERROR]${NC} Possible causes:"
-    echo -e "  1. Network issues (check your internet connection)."
-    echo -e "  2. Repository problems (try running 'sudo apt update')."
-    echo -e "  3. Missing dependencies (check logs or output)."
-    echo -e "  4. Insufficient permissions (ensure you are using sudo)."
-    echo -e "${RED}[INFO]${NC} Skipping ${tool_name} and continuing with the next tool."
-    
-    # Optionally log errors to a file
-    echo "$(date) - Failed to install ${tool_name} with command: ${failed_command}" >> install_errors.log
-}
-
-
-###################################################################################################################
-# Function to handle Git repository downloads
-###################################################################################################################
+###############################################################################
+# Download helper: git clone
+###############################################################################
 git_download() {
     local repo_url="$1"
     local repo_name="$2"
-
-    if [[ -d "$repo_name" ]]; then
-        rm -rf "$repo_name"
-    fi
-
-    printf "${YELLOW}[INFO]${NC} Cloning       %-31s " "$repo_name"
-    (git clone "$repo_url" >/dev/null 2>&1) & spinner "$repo_name"
-    if [[ $? -ne 0 ]]; then
-        printf "${RED}[ERROR]${NC} Could not clone ${repo_name}. Skipping.\n"
-    fi
+    rm -rf "$repo_name" 2>/dev/null
+    (git clone --depth 1 "$repo_url" "$repo_name" >>"$LOGFILE" 2>&1) & spinner "$repo_name" "cloning" "cloned"
+    [[ $? -eq 0 ]] || log "clone failed: $repo_url"
 }
 
-
-###################################################################################################################
-# Function to handle ZIP repository downloads
-###################################################################################################################
+###############################################################################
+# Download helper: zip archive extracted into a folder
+###############################################################################
 folder_zip_download() {
     local zip_url="$1"
     local zip_name="$2"
-    local extract_dir="${3:-${zip_name%.zip}}"  # Default directory derived from zip name
-
-    # Ensure previous directories and zip files are cleaned up
-    if [[ -d "$extract_dir" || -f "$zip_name" ]]; then
-        rm -rf "$extract_dir" "$zip_name"
-    fi
-
-    # Download the zip file (with timeout)
-    (curl -sL --connect-timeout 10 --max-time 120 "$zip_url" -o "$zip_name" >/dev/null 2>&1) & spinner "$extract_dir"
-    if [[ $? -ne 0 ]]; then
+    local extract_dir="${3:-${zip_name%.zip}}"
+    rm -rf "$extract_dir" "$zip_name" 2>/dev/null
+    (
+        curl -fsSL --connect-timeout 10 --max-time 120 "$zip_url" -o "$zip_name" 2>/dev/null &&
+        unzip -qo "$zip_name" -d "$extract_dir" >/dev/null 2>&1
+        rc=$?
         rm -f "$zip_name"
-        printf "${RED}[ERROR]${NC} Download failed for ${extract_dir}. Skipping.\n"
-        return 1
-    fi
-
-    # Extract the zip file into the specified directory
-    if ! unzip -qo "$zip_name" -d "$extract_dir" >/dev/null 2>&1; then
-        printf "${RED}[ERROR]${NC} Extraction failed for ${extract_dir}. Skipping.\n"
-        rm -f "$zip_name"
-        return 1
-    fi
-
-    # Clean up the zip file after extraction
-    rm -f "$zip_name"
+        exit $rc
+    ) & spinner "$extract_dir" "downloading" "ready"
+    [[ $? -eq 0 ]] || log "folder zip failed: $zip_url"
 }
 
-
-###################################################################################################################
-# Function to handle single file which are ZIP
-###################################################################################################################
+###############################################################################
+# Download helper: single file delivered inside a .zip or .gz
+###############################################################################
 single_file_zip_gz() {
     local file_url="$1"
     local file_name="$2"
-
-    # Ensure previous files are cleaned up
-    if [[ -f "$file_name" ]]; then
-        rm -f "$file_name"
-    fi
-
-    # Download the archive file (with timeout)
-    (curl -sL --connect-timeout 10 --max-time 120 "$file_url" -o "$file_name" >/dev/null 2>&1) & spinner "$file_name"
-    if [[ $? -ne 0 ]]; then
-        rm -f "$file_name"
-        printf "${RED}[ERROR]${NC} Download failed for ${file_name}. Skipping.\n"
-        return 1
-    fi
-
-    # Determine file type and extract accordingly
-    if [[ "$file_name" == *.gz ]]; then
-        # For .gz files, extract as a single file
-        if ! gunzip -c "$file_name" > "${file_name%.gz}" 2>/dev/null; then
-            printf "${RED}[ERROR]${NC} Extraction failed for ${file_name}. Skipping.\n"
-            rm -f "$file_name"
-            return 1
+    local label="${file_name%.*}"
+    rm -f "$file_name" 2>/dev/null
+    (
+        curl -fsSL --connect-timeout 10 --max-time 120 "$file_url" -o "$file_name" 2>/dev/null || exit 1
+        if [[ "$file_name" == *.gz ]]; then
+            gunzip -c "$file_name" > "${file_name%.gz}" 2>/dev/null || exit 1
+        elif [[ "$file_name" == *.zip ]]; then
+            inner="$(unzip -Z1 "$file_name" 2>/dev/null | head -1)"
+            unzip -p "$file_name" "$inner" > "${file_name%.zip}" 2>/dev/null || exit 1
         fi
-    elif [[ "$file_name" == *.zip ]]; then
-        # For .zip files, extract the single file (assumes only one file inside)
-        local extracted_file
-        extracted_file=$(unzip -Z1 "$file_name" 2>/dev/null | head -1)
-        if ! unzip -p "$file_name" "$extracted_file" > "${file_name%.zip}" 2>/dev/null; then
-            printf "${RED}[ERROR]${NC} Extraction failed for ${file_name}. Skipping.\n"
-            rm -f "$file_name"
-            return 1
-        fi
-    else
-        printf "\r${YELLOW}[WARNING]${NC} Unsupported file format: ${file_name}\n"
-    fi
-
-    # Clean up the downloaded archive file
-    rm -f "$file_name"
+        rm -f "$file_name"
+        exit 0
+    ) & spinner "$label" "downloading" "ready"
+    [[ $? -eq 0 ]] || { rm -f "$file_name" 2>/dev/null; log "single zip/gz failed: $file_url"; }
 }
 
-
-###################################################################################################################
-# function to check for latest release of a file and download the file from GitHub if needed a newer version is avilable
-###################################################################################################################
-# Main Function (Now One Line per Download)
+###############################################################################
+# Download helper: pick an asset from the latest GitHub release and fetch it
+###############################################################################
 api_file_check_and_download_file() {
     local api_url="$1"
     local filename="$2"
     local filter="$3"
 
-    # Get release information from GitHub API (with timeout, follow redirects)
-    local response=$(curl -sL --connect-timeout 10 --max-time 30 "$api_url")
+    local response file_url
+    response="$(curl -fsSL --connect-timeout 10 --max-time 30 "$api_url" 2>/dev/null)"
 
-    # Determine if the filename has an extension
-    local file_url=""
     if [[ "$filename" =~ \.[a-zA-Z0-9]+$ ]]; then
-        # Filename has an extension — use stricter match
-        file_url=$(echo "$response" | \
-            grep -i 'browser_download_url' | \
-            grep -i -w "$filter" | \
-            grep -i '\.sh\|\.exe\|\.zip' | \
-            head -1 | \
-            awk -F '"' '{print $4}')
+        file_url="$(echo "$response" | grep -i 'browser_download_url' | grep -i -w "$filter" \
+            | grep -i '\.sh\|\.exe\|\.zip' | head -1 | awk -F '"' '{print $4}')"
     else
-        # No extension in filename — match more loosely
-        file_url=$(echo "$response" | \
-            grep -i 'browser_download_url' | \
-            grep -i -w "$filter" | \
-            head -1 | \
-            awk -F '"' '{print $4}')
+        file_url="$(echo "$response" | grep -i 'browser_download_url' | grep -i -w "$filter" \
+            | head -1 | awk -F '"' '{print $4}')"
     fi
 
-    # Extract remote timestamp (optional logic for freshness checking)
-    local remote_time=$(echo "$response" | grep -i '"updated_at"' | head -1 | awk -F '"' '{print $4}')
-    local remote_timestamp=$(date -d "$remote_time" +%s 2>/dev/null)
-
-    # If no matching file was found, warn and return
     if [[ -z "$file_url" ]]; then
-        printf "\r${YELLOW}[WARNING]${NC} Could not find download URL for ${filename}\n"
+        skip_line "$filename" "no asset found"
+        log "no release asset for $filename via $api_url"
         return
     fi
 
-    # Download with spinner (Direct or ZIP)
     if [[ "$file_url" == *.zip ]]; then
-        local temp_zip="temp_download.zip"
-        (curl -sL --connect-timeout 10 --max-time 120 "$file_url" -o "$temp_zip" >/dev/null 2>&1) & spinner "$filename"
-        local dl_status=$?
-        wait
-
-        if [[ $dl_status -ne 0 ]]; then
-            rm -f "$temp_zip"
-            printf "${RED}[ERROR]${NC} Download failed for ${filename}. Skipping.\n"
-            return 1
-        fi
-
-        # List zip contents and find the file (handles subdirectories)
-        local extracted_file=$(unzip -Z1 "$temp_zip" 2>/dev/null | grep -i "${filename}$" | head -1)
-
-        # If exact match not found, try partial match
-        if [[ -z "$extracted_file" ]]; then
-            extracted_file=$(unzip -Z1 "$temp_zip" 2>/dev/null | grep -i "$filename" | head -1)
-        fi
-
-        if [[ -z "$extracted_file" ]]; then
-            printf "\r${YELLOW}[WARNING]${NC} ${filename} not found in ZIP archive.\n"
-            rm -f "$temp_zip"
-            return
-        fi
-
-        # Extract file (junk paths to flatten directory structure)
-        unzip -jo "$temp_zip" "$extracted_file" -d . >/dev/null 2>&1
-
-        # Get the basename in case file was in a subdirectory
-        local extracted_basename=$(basename "$extracted_file")
-
-        # Rename to target filename if different
-        if [[ "$extracted_basename" != "$filename" && -f "$extracted_basename" ]]; then
-            mv "$extracted_basename" "$filename" 2>/dev/null || true
-        fi
-
-        rm -f "$temp_zip"
-
+        (
+            tmp="temp_download.$$.zip"
+            curl -fsSL --connect-timeout 10 --max-time 120 "$file_url" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; exit 1; }
+            inner="$(unzip -Z1 "$tmp" 2>/dev/null | grep -i "${filename}$" | head -1)"
+            [[ -z "$inner" ]] && inner="$(unzip -Z1 "$tmp" 2>/dev/null | grep -i "$filename" | head -1)"
+            [[ -z "$inner" ]] && { rm -f "$tmp"; exit 1; }
+            unzip -jo "$tmp" "$inner" -d . >/dev/null 2>&1
+            base="$(basename "$inner")"
+            [[ "$base" != "$filename" && -f "$base" ]] && mv "$base" "$filename" 2>/dev/null
+            rm -f "$tmp"
+            exit 0
+        ) & spinner "$filename" "downloading" "ready"
+        [[ $? -eq 0 ]] || log "release zip failed: $file_url"
     else
-        (curl -sL --connect-timeout 10 --max-time 120 "$file_url" -o "$filename" >/dev/null 2>&1) & spinner "$filename"
-        if [[ $? -ne 0 ]]; then
-            rm -f "$filename"
-            printf "${RED}[ERROR]${NC} Download failed for ${filename}. Skipping.\n"
-            return 1
-        fi
+        (curl -fsSL --connect-timeout 10 --max-time 120 "$file_url" -o "$filename" 2>/dev/null) & spinner "$filename" "downloading" "ready"
+        [[ $? -eq 0 ]] || { rm -f "$filename" 2>/dev/null; log "release file failed: $file_url"; }
     fi
 }
 
-
-###################################################################################################################
-# function to check for latest version of a single file, and download if it's a newer version.
-###################################################################################################################
+###############################################################################
+# Download helper: single file, refreshed only when the remote copy is newer
+###############################################################################
 single_file_check_and_download_file() {
     local download_url="$1"
     local local_file="$2"
+    local remote_time local_time
 
-    # Fetch the `Last-Modified` timestamp from the remote file (with timeout)
-    local remote_time=$(curl -sI --connect-timeout 10 --max-time 15 "$download_url" | grep -i "Last-Modified" | cut -d: -f2- | xargs -I{} date -d {} +%s 2>/dev/null)
+    remote_time="$(curl -fsSI --connect-timeout 10 --max-time 15 "$download_url" 2>/dev/null \
+        | grep -i 'Last-Modified' | cut -d: -f2- | xargs -I{} date -d {} +%s 2>/dev/null)"
 
     if [[ -f "$local_file" ]]; then
-        # Get local file's modification time
-        local local_time
-        local_time=$(stat -c "%Y" "$local_file")
-
-        # Compare timestamps only when both values are valid integers
-        if [[ -n "$remote_time" && "$remote_time" -gt "$local_time" ]]; then
-            printf "${YELLOW}[INFO]${NC} Updating      %-31s (Newer version found)\n" "$local_file"
+        local_time="$(stat -c '%Y' "$local_file" 2>/dev/null)"
+        if [[ -n "$remote_time" && -n "$local_time" && "$remote_time" -gt "$local_time" ]]; then
             rm -f "$local_file"
-            printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$local_file"
-            (curl -sL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$local_file"
-            if [[ $? -ne 0 ]]; then
-                rm -f "$local_file"
-                printf "${RED}[ERROR]${NC} Download failed for ${local_file}. Skipping.\n"
-            fi
+            (curl -fsSL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" 2>/dev/null) & spinner "$local_file" "updating" "updated"
+            [[ $? -eq 0 ]] || { rm -f "$local_file" 2>/dev/null; log "update failed: $download_url"; }
         else
-            printf "${BLUE}[SKIP]${NC} Found        %-31s ${BLUE}[Up-to-Date]${NC}\n" "$local_file"
+            skip_line "$local_file" "up to date"
         fi
     else
-        # If file doesn't exist, download it
-        printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$local_file"
-        (curl -sL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$local_file"
-        if [[ $? -ne 0 ]]; then
-            rm -f "$local_file"
-            printf "${RED}[ERROR]${NC} Download failed for ${local_file}. Skipping.\n"
-        fi
+        (curl -fsSL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" 2>/dev/null) & spinner "$local_file" "downloading" "ready"
+        [[ $? -eq 0 ]] || { rm -f "$local_file" 2>/dev/null; log "download failed: $download_url"; }
     fi
 }
 
-
-###################################################################################################################
-# Function to download obfuscated scripts from GitHub
-###################################################################################################################
+###############################################################################
+# Download helper: obfuscated payloads (kept in a dedicated sub-folder)
+###############################################################################
 download_obfuscated_scripts() {
     local download_url="$1"
     local filename="$2"
 
-    # Require toolsdir to be set already
     if [[ -z "$toolsdir" ]]; then
-        echo -e "${RED}[ERROR]${NC} toolsdir is not set."
+        err "toolsdir is not set."
         return 1
     fi
 
     local obftoolsdir="${toolsdir}/obfuscated"
     local local_file="${obftoolsdir}/${filename}"
-
-    mkdir -p "$obftoolsdir" >/dev/null 2>&1 || {
-        echo -e "${RED}[ERROR]${NC} Could not create directory: ${obftoolsdir}"
-        return 1
-    }
+    mkdir -p "$obftoolsdir" >/dev/null 2>&1 || { err "Could not create ${obftoolsdir}"; return 1; }
 
     if [[ -f "$local_file" ]]; then
-        printf "${BLUE}[SKIP]${NC} Found        %-31s ${BLUE}[Already Exists]${NC}\n" "$filename"
+        skip_line "$filename" "already present"
     else
-        printf "${YELLOW}[INFO]${NC} Downloading   %-31s " "$filename"
-        (curl -sL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" >/dev/null 2>&1) & spinner "$filename"
-        if [[ $? -ne 0 ]]; then
-            rm -f "$local_file"
-            printf "${RED}[ERROR]${NC} Download failed for ${filename}. Skipping.\n"
-        fi
+        (curl -fsSL --connect-timeout 10 --max-time 120 "$download_url" -o "$local_file" 2>/dev/null) & spinner "$filename" "downloading" "ready"
+        [[ $? -eq 0 ]] || { rm -f "$local_file" 2>/dev/null; log "obfuscated download failed: $download_url"; }
     fi
 }
 
-
-###################################################################################################################
-# Tools install function
-###################################################################################################################
-# Function for installing tools, and then calling the function via the menu
-install_tools() {
-    # Check if user is NOT root
-    if [[ $UID -ne 0 ]]; then
-        echo -e "${YELLOW}[WAR]${NC} To install the tools you need to run with SUDO"
-        # Ensure the user can sudo or exit
-        sudo -v || exit 1
-    fi
-
-    echo -e "${GREEN}-------------------------------------------------------${NC}"
-    echo -e "${GREEN}[INFO] Installing tools${NC}"
-    echo -e "${GREEN}-------------------------------------------------------${NC}"
-
-    # Function to handle tool installation with spinner
+###############################################################################
+# Install a single tool
+#
+#   install_tool <name> <install_cmd> <check_cmd> [<pre_install_cmd>]
+###############################################################################
 install_tool() {
-    local tool_name="$1"         # Name of the tool
-    local install_command="$2"  # Command to install the tool
-    local check_command="$3"    # Command to check if the tool is already installed
-    local pre_install_command="$4"  # Optional pre-installation command
+    local tool_name="$1"
+    local install_command="$2"
+    local check_command="$3"
+    local pre_install_command="$4"
 
-    # Start the process on a single line
-    printf "\r${YELLOW}[INFO]${NC} Processing   %-31s " "$tool_name"
-
-    # Check if the tool is already installed
     if eval "$check_command" >/dev/null 2>&1; then
-        printf "\r${BLUE}[SKIP]${NC} Found      %-31s ${BLUE}[Installed]${NC}\n" "$tool_name"
+        skip_line "$tool_name" "installed"
         return
     fi
 
-    # Run the pre-installation command if provided
     if [[ -n "$pre_install_command" ]]; then
-        printf "\r${YELLOW}[INFO]${NC} Preparing   %-31s " "$tool_name"
-        if ! eval "$pre_install_command" >/dev/null 2>&1; then
-            printf "\r${RED}[ERROR]${NC} Failed to prepare %-31s ${RED}[FAILED]${NC}\n" "$tool_name"
-            echo -e "${RED}[ERROR]${NC} Pre-install command: ${YELLOW}${pre_install_command}${NC}"
-            echo "$(date) - Failed to prepare ${tool_name} with pre-install command: ${pre_install_command}" >> install_errors.log
+        if ! eval "$pre_install_command" >>"$LOGFILE" 2>&1; then
+            STAT_FAIL=$((STAT_FAIL + 1))
+            printf '  %s%s%s  %-*s %s%s%s\n' "$C_RED" "$GLYPH_ERR" "$C_RESET" "$NAME_WIDTH" "$tool_name" "$C_RED" "prep failed" "$C_RESET"
+            log "prepare failed: ${tool_name} :: ${pre_install_command}"
             return 1
         fi
     fi
 
-    # Update status to installing (with spinner)
-    printf "\r${YELLOW}[INFO]${NC} Installing   %-31s " "$tool_name"
-
-    # Run installation in background with spinner
-    (eval "$install_command" >/dev/null 2>&1) &
-    local install_pid=$!
-
-    # Show spinner while installing
-    local spinstr='|/-\'
-    local i=0
-    while kill -0 "$install_pid" 2>/dev/null; do
-        printf "\r${YELLOW}[INFO]${NC} Installing   %-31s [%c]" "$tool_name" "${spinstr:i:1}"
-        i=$(( (i + 1) % ${#spinstr} ))
-        sleep 0.1
-    done
-
-    # Check if the background process succeeded
-    wait "$install_pid"
-    local exit_code=$?
-
-    if [[ $exit_code -ne 0 ]]; then
-        printf "\r${RED}[ERROR]${NC} Failed to install %-31s ${RED}[FAILED]${NC}\n" "$tool_name"
-        echo -e "${RED}[ERROR]${NC} Command used: ${YELLOW}${install_command}${NC}"
-        echo "$(date) - Failed to install ${tool_name} with command: ${install_command}" >> install_errors.log
-        return 1
-    fi
-
-    # Check if the tool was successfully installed
-    if eval "$check_command" >/dev/null 2>&1; then
-        printf "\r${GREEN}[OK]${NC}     Installed  %-31s ${GREEN}[DONE]${NC}\n" "$tool_name"
-    else
-        printf "\r${RED}[ERROR]${NC} Failed to install %-31s ${RED}[FAILED]${NC}\n" "$tool_name"
-        echo "$(date) - Failed to install ${tool_name} with command: ${install_command}" >> install_errors.log
+    # Run the install and verify it in the same background job so the spinner's
+    # exit code reflects the true outcome.
+    ( eval "$install_command" >>"$LOGFILE" 2>&1 && eval "$check_command" >/dev/null 2>&1 ) & spinner "$tool_name" "installing" "installed"
+    if [[ $? -ne 0 ]]; then
+        log "install failed: ${tool_name} :: ${install_command}"
     fi
 }
 
+###############################################################################
+# Phase: install tools
+###############################################################################
+install_tools() {
+    if [[ $UID -ne 0 ]]; then
+        warn "Installing tools requires elevated privileges."
+        sudo -v || { err "sudo authentication failed."; return 1; }
+    fi
 
-    # Tool installation logic
+    reset_stats
+    section "Installing tools"
+
     install_tool "seclists" \
         "sudo apt-get -qq -y install seclists" \
-        "[[ \$(ls /usr/share | grep seclists) == 'seclists' ]]"
-
-    #install_tool "batcat" \
-        #"sudo apt-get -qq -y install bat" \
-        #"[[ \$(which batcat) == '/usr/bin/batcat' ]]"
+        "[[ -d /usr/share/seclists ]]"
 
     install_tool "rustscan" \
-        "deb_url=\$(curl -sL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*rustscan[^\"]*\\.deb' | head -1); if [[ -z \"\$deb_url\" ]]; then deb_url=\$(curl -sL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*\\.deb\\.zip' | head -1); fi; if [[ \"\$deb_url\" == *.zip ]]; then sudo wget -q --timeout=60 -O rustscan.deb.zip \"\$deb_url\" && unzip -o rustscan.deb.zip && sudo dpkg -i rustscan*.deb && rm -f rustscan.deb.zip rustscan*.deb; elif [[ -n \"\$deb_url\" ]]; then sudo wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb && rm -f rustscan.deb; else false; fi" \
-        "[[ -x /usr/bin/rustscan ]] || command -v rustscan &>/dev/null"
+        "sudo apt-get -qq -y install rustscan >/dev/null 2>&1; if command -v rustscan >/dev/null 2>&1; then true; else deb_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*rustscan[^\"]*\\.deb' | head -1); if [[ -z \"\$deb_url\" ]]; then deb_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*\\.deb\\.zip' | head -1); fi; if [[ \"\$deb_url\" == *.zip ]]; then wget -q --timeout=60 -O rustscan.deb.zip \"\$deb_url\" && unzip -o rustscan.deb.zip && sudo dpkg -i rustscan*.deb; rm -f rustscan.deb.zip rustscan*.deb; elif [[ -n \"\$deb_url\" ]]; then wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb; rm -f rustscan.deb; else false; fi; fi" \
+        "command -v rustscan >/dev/null 2>&1"
 
     install_tool "wfuzz" \
         "sudo apt-get -qq -y install wfuzz" \
-        "[[ \$(which wfuzz) == '/usr/bin/wfuzz' ]]"
+        "command -v wfuzz >/dev/null 2>&1"
 
     install_tool "ffuf" \
         "sudo apt-get -qq -y install ffuf" \
-        "[[ \$(which ffuf) == '/usr/bin/ffuf' ]]"
+        "command -v ffuf >/dev/null 2>&1"
 
     install_tool "bloodhound" \
         "sudo apt-get -qq -y install bloodhound" \
-        "[[ \$(which bloodhound) == '/usr/bin/bloodhound' ]]"
+        "command -v bloodhound >/dev/null 2>&1"
 
     install_tool "neo4j" \
         "sudo apt-get -qq -y install neo4j" \
-        "[[ \$(which neo4j) == '/usr/bin/neo4j' ]]"
+        "command -v neo4j >/dev/null 2>&1"
 
     install_tool "gobuster" \
         "sudo apt-get -qq -y install gobuster" \
-        "[[ \$(which gobuster) == '/usr/bin/gobuster' ]]"
+        "command -v gobuster >/dev/null 2>&1"
 
     install_tool "feroxbuster" \
         "sudo apt-get -qq -y install feroxbuster" \
-        "[[ \$(which feroxbuster) == '/usr/bin/feroxbuster' ]]"
+        "command -v feroxbuster >/dev/null 2>&1"
 
     install_tool "certipy-ad" \
-        "sudo python3 -m pip install -qq certipy-ad" \
-        "[[ \$(which certipy-ad) == '/usr/local/bin/certipy-ad' || \$(which certipy-ad) == '/usr/bin/certipy-ad' ]]"
+        "sudo python3 -m pip install -q --break-system-packages certipy-ad || sudo python3 -m pip install -q certipy-ad" \
+        "command -v certipy-ad >/dev/null 2>&1"
 
     install_tool "pypykatz" \
-        "sudo python3 -m pip install -qqq pypykatz" \
-        "[[ \$(which pypykatz) == '/usr/local/bin/pypykatz' || \$(which pypykatz) == '/usr/bin/pypykatz' ]]"
+        "sudo python3 -m pip install -q --break-system-packages pypykatz || sudo python3 -m pip install -q pypykatz" \
+        "command -v pypykatz >/dev/null 2>&1"
 
     install_tool "sublime-text" \
-        "sudo wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg | gpg --no-default-keyring --keyring ./temp-keyring.gpg --import && sudo gpg --no-default-keyring --keyring ./temp-keyring.gpg --export --output sublime-text.gpg && sudo rm temp-keyring.gpg temp-keyring.gpg~ && sudo mkdir -p /usr/local/share/keyrings && sudo mv ./sublime-text.gpg /usr/local/share/keyrings && echo 'deb [signed-by=/usr/local/share/keyrings/sublime-text.gpg] https://download.sublimetext.com/ apt/stable/' | sudo tee /etc/apt/sources.list.d/sublime-text.list && sudo apt-get update -qq && sudo apt-get install -qq -y sublime-text" \
-        "[[ \$(which subl) == '/usr/bin/subl' ]]"
+        "wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg | gpg --no-default-keyring --keyring ./temp-keyring.gpg --import && gpg --no-default-keyring --keyring ./temp-keyring.gpg --export --output sublime-text.gpg && rm -f temp-keyring.gpg temp-keyring.gpg~ && sudo mkdir -p /usr/local/share/keyrings && sudo mv ./sublime-text.gpg /usr/local/share/keyrings && echo 'deb [signed-by=/usr/local/share/keyrings/sublime-text.gpg] https://download.sublimetext.com/ apt/stable/' | sudo tee /etc/apt/sources.list.d/sublime-text.list && sudo apt-get update -qq && sudo apt-get install -qq -y sublime-text" \
+        "command -v subl >/dev/null 2>&1"
 
     install_tool "docker" \
         "sudo apt-get -qq -y install docker.io" \
-        "[[ \$(which docker) == '/usr/bin/docker' ]]"
+        "command -v docker >/dev/null 2>&1"
 
     install_tool "docker-compose" \
         "sudo apt-get -qq -y install docker-compose" \
-        "[[ \$(which docker-compose) == '/usr/bin/docker-compose' ]]"
-        
+        "command -v docker-compose >/dev/null 2>&1"
+
     install_tool "bloodhound-CE" \
-        "curl -L https://ghst.ly/getbhce -o /opt/bloodhoundCE/docker-compose.yml" \
-        "[[ -d /opt/bloodhoundCE && -f /opt/bloodhoundCE/docker-compose.yml ]]" \
-        "mkdir -p /opt/bloodhoundCE"
-        
+        "curl -fsSL https://ghst.ly/getbhce -o /opt/bloodhoundCE/docker-compose.yml" \
+        "[[ -f /opt/bloodhoundCE/docker-compose.yml ]]" \
+        "sudo mkdir -p /opt/bloodhoundCE"
 
-    echo ""
-    echo -e "${BLUE}[COMPLETE]${NC} All tools installed successfully!"
-
+    summary
 }
 
-###################################################################################################################
-# DOWNLOADING SCRIPTS
-###################################################################################################################
-
-# Function for downloading scripts, and then calling the function via the menu
+###############################################################################
+# Phase: download scripts
+###############################################################################
 download_scripts() {
+    toolsdir="/opt/tools"
 
-# Tools directory
-toolsdir="/opt/tools"
+    info "Choose a directory to download scripts into (Tab completion enabled)."
+    toolsdir="$(read_directory "$(printf '  %s%s%s  Directory [%s%s%s]: ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$toolsdir" "$C_RESET")" "$toolsdir")"
 
-# Prompt the user for a custom directory with autocomplete
-echo -e "${YELLOW}[INFO]${NC} Choose directory to download Script to. Example: /opt/tools"
-echo -e "${YELLOW}[INFO]${NC} ${BLUE}(Tab completion enabled)${NC}"
-toolsdir=$(read_directory "$(echo -e "${YELLOW}[INFO]${NC} Enter directory [${YELLOW}${toolsdir}${NC}]: ")" "$toolsdir")
-
-# Check if directory exists
-if [[ -d "$toolsdir" ]]; then
-    echo -e "${YELLOW}[INFO]${NC} Using directory: [${BLUE}${toolsdir}${YELLOW}]"
-else
-    mkdir -p "$toolsdir" >/dev/null 2>&1
-    # Check if the command succeeded
-    if [[ $? -ne 0 ]]; then
-        echo ""
-        echo -e "${RED}[WAR]${NC} You don't have access to create folders in [${BLUE}${toolsdir}${NC}]. Rerun the script with sudo."
-        exit 1
+    if [[ -d "$toolsdir" ]]; then
+        info "Using directory: ${C_BOLD}${toolsdir}${C_RESET}"
     else
-        echo -e "${YELLOW}[INFO]${NC} Created directory: [${BLUE}${toolsdir}${NC}]"
+        if mkdir -p "$toolsdir" >/dev/null 2>&1; then
+            info "Created directory: ${C_BOLD}${toolsdir}${C_RESET}"
+        else
+            err "No permission to create ${C_BOLD}${toolsdir}${C_RESET}. Re-run with sudo."
+            return 1
+        fi
     fi
-fi
 
-# Change to the tools directory
-if ! cd "$toolsdir"; then
-    echo -e "${RED}[ERROR]${NC} Failed to enter directory: ${toolsdir}"
-    exit 1
-fi
-echo -e "${GREEN}-------------------------------------------------------"
-echo -e "${GREEN}[INFO] Downloading Scripts to ${BLUE}[${toolsdir}]${NC}"
-echo -e "${GREEN}-------------------------------------------------------${NC}"
-sleep 1
+    cd "$toolsdir" || { err "Failed to enter ${toolsdir}"; return 1; }
+
+    reset_stats
+    section "Downloading scripts to ${toolsdir}"
+
 
 
 #####################################################################################################################
@@ -917,7 +728,7 @@ mimikatz_url=$(curl -sL --connect-timeout 10 --max-time 30 "https://api.github.c
 if [[ -n "$mimikatz_url" ]]; then
     folder_zip_download "$mimikatz_url" "mimikatz_trunk.zip" "mimikatz"
 else
-    printf "${YELLOW}[WARNING]${NC} Could not fetch latest mimikatz version, using fallback\n"
+    warn "Could not fetch latest mimikatz version, using fallback"
     folder_zip_download "https://github.com/gentilkiwi/mimikatz/releases/download/2.2.0-20220919/mimikatz_trunk.zip" "mimikatz_trunk.zip" "mimikatz"
 fi
 
@@ -931,7 +742,7 @@ runascs_url=$(curl -sL --connect-timeout 10 --max-time 30 "https://api.github.co
 if [[ -n "$runascs_url" ]]; then
     single_file_zip_gz "$runascs_url" "RunasCS.zip"
 else
-    printf "${YELLOW}[WARNING]${NC} Could not fetch latest RunasCs version, using fallback\n"
+    warn "Could not fetch latest RunasCs version, using fallback"
     single_file_zip_gz "https://github.com/antonioCoco/RunasCs/releases/download/v1.5/RunasCs.zip" "RunasCS.zip"
 fi
 
@@ -941,40 +752,33 @@ chisel_filename=$(basename "$chisel_url" 2>/dev/null)
 if [[ -n "$chisel_url" && -n "$chisel_filename" ]]; then
     single_file_zip_gz "$chisel_url" "$chisel_filename"
 else
-    printf "${YELLOW}[WARNING]${NC} Could not fetch latest chisel version, using fallback\n"
+    warn "Could not fetch latest chisel version, using fallback"
     single_file_zip_gz "https://github.com/jpillora/chisel/releases/download/v1.10.1/chisel_1.10.1_linux_amd64.gz" "chisel_1.10.1_linux_amd64.gz"
 fi
 
 
-
-# Clean up
-perform_cleanup
-
+    perform_cleanup
+    summary
 }
 
-
-#####################################################################################################################
-# Download obfuscated versions
-#####################################################################################################################
+###############################################################################
+# Phase: download obfuscated payloads
+###############################################################################
 obfuscated_scripts() {
-    # Default base directory
-    toolsdir="/opt/tools"
+    toolsdir="${toolsdir:-/opt/tools}"
 
-    echo -e "${YELLOW}[INFO]${NC} Choose download directory. An ${BLUE}[Obfuscated]${NC} folder will be created here"
-    echo -e "${YELLOW}[INFO]${NC} ${BLUE}(Tab completion enabled)${NC}"
-    toolsdir=$(read_directory "$(echo -e "${YELLOW}[INFO]${NC} Enter directory [${YELLOW}${toolsdir}${NC}]: ")" "$toolsdir")
+    info "Choose a base directory; an ${C_BOLD}obfuscated${C_RESET} sub-folder will be created inside it."
+    toolsdir="$(read_directory "$(printf '  %s%s%s  Directory [%s%s%s]: ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$toolsdir" "$C_RESET")" "$toolsdir")"
 
-    # Just ensure the directory exists
     if [[ ! -d "$toolsdir" ]]; then
-        mkdir -p "$toolsdir" >/dev/null 2>&1 || {
-            echo -e "${RED}[WAR]${NC} Cannot create directory: ${RED}[${toolsdir}]${NC}"
-            exit 1
-        }
-        echo -e "${YELLOW}[INFO]${NC} Created directory: ${BLUE}[${toolsdir}/obfuscated]${NC}"
+        mkdir -p "$toolsdir" >/dev/null 2>&1 || { err "Cannot create ${C_BOLD}${toolsdir}${C_RESET}"; return 1; }
+        info "Created directory: ${C_BOLD}${toolsdir}/obfuscated${C_RESET}"
     else
-        echo -e "${YELLOW}[INFO]${NC} Using directory: ${BLUE}[${toolsdir}/obfuscated]${NC}"
+        info "Using directory: ${C_BOLD}${toolsdir}/obfuscated${C_RESET}"
     fi
 
+    reset_stats
+    section "Downloading obfuscated payloads"
 
 # Downloading Certify.exe._obf.exe
 download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/Certify.exe._obf.exe" "Certify.exe._obf.exe"
@@ -1027,140 +831,122 @@ download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/Obfuscat
 # Downloading ADCollector.exe._obf.exe
 download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/ADCollector.exe._obf.exe" "ADCollector.exe._obf.exe"
 
-echo ""
-echo -e "${BLUE}[COMPLETE]${NC} Obfuscated scripts downloaded successfully!"
-echo ""
-
+    summary
 }
 
-
-###################################################################################################################
-# Function for installing custom webserver from the tools directory and adding a simple function for extracting ports
-# from rustscan output
-###################################################################################################################
+###############################################################################
+# Phase: add custom shell functions to ~/.zshrc
+###############################################################################
 add_custom_functions() {
     toolsdir="${toolsdir:-/opt/tools}"
-    echo -e "${YELLOW}[INFO]${NC} Adding functions to the .zshrc file"
-    echo ""
-    # Custom HTTP server from the tools directory
-    # Adding custom server to server tools to ~/.bashrc
+    section "Adding custom shell functions"
+
+    # ----- servtools: quick HTTP server from the tools directory -------------
     if grep -q 'servtools()' "$zshrc_file" 2>/dev/null; then
-        echo -e "${GREEN}[OK]${NC} servtools already installed"
-        echo -e "${YELLOW}[INFO]${NC} To use this server, reopen terminal and type ${BLUE}servtools <port>"
-        echo ""
+        skip_line "servtools" "already added"
     else
-        echo -e "${YELLOW}[!] Adding a custom server for starting HTTP server from ${toolsdir} directory"
-        echo -e "${YELLOW}[!] Adding servtools to ${user_home}/.zshrc file}"
-        echo "" >> "$zshrc_file" 2>/dev/null
-        echo "" >> "$zshrc_file" 2>/dev/null
-        echo "" >> "$zshrc_file" 2>/dev/null
-        echo "" >> "$zshrc_file" 2>/dev/null
-        echo "# My personal configuration" >> "$zshrc_file" 2>/dev/null
-        echo "" >> "$zshrc_file" 2>/dev/null
-        echo "# Http server function which starts an http server from the /tools folder" >> "$zshrc_file" 2>/dev/null
-        echo "# Call this function using servtools <port> [--obf]" >> "$zshrc_file" 2>/dev/null
-        echo "servtools() {" >> "$zshrc_file" 2>/dev/null
-        echo '    GREEN="\e[32m"' >> "$zshrc_file" 2>/dev/null
-        echo '    NC="\e[0m"' >> "$zshrc_file" 2>/dev/null
-        echo "    PORT=\$1" >> "$zshrc_file" 2>/dev/null
-        echo "    if [[ \$2 == '--obf' ]]; then" >> "$zshrc_file" 2>/dev/null
-        echo '        DIR="'${toolsdir}'/obfuscated"' >> "$zshrc_file" 2>/dev/null
-        echo "    else" >> "$zshrc_file" 2>/dev/null
-        echo '        DIR="'${toolsdir}'"' >> "$zshrc_file" 2>/dev/null
-        echo "    fi" >> "$zshrc_file" 2>/dev/null
-        echo "    IP=\$(ip -4 addr show tun0 | grep -oP \"(?<=inet ).*(?=/)\")" >> "$zshrc_file" 2>/dev/null
-        echo '    echo -e "${GREEN}Files in directory ${BLUE}[${DIR}]${NC}"' >> "$zshrc_file" 2>/dev/null
-        echo '    ls ${DIR}' >> "$zshrc_file" 2>/dev/null
-        echo '    echo -e "${GREEN}-------------------------------------------------------------------------${NC}"' >> "$zshrc_file" 2>/dev/null
-        echo "    echo -e \"[OK] Starting HTTP server from \${GREEN}[\$DIR]\${NC} on \$PORT\"" >> "$zshrc_file" 2>/dev/null
-        echo "    echo -e \"[OK] Address: http://\$IP:\$PORT/\"" >> "$zshrc_file" 2>/dev/null
-        echo "    python3 -m http.server \$PORT --directory \$DIR" >> "$zshrc_file" 2>/dev/null
-        echo '}' >> "$zshrc_file" 2>/dev/null
-        echo "" >> "$zshrc_file" 2>/dev/null
-        echo "" >> "$zshrc_file" 2>/dev/null
-
-        echo -e "${YELLOW}[INFO]${NC} To use this server, reopen the terminal and type ${BLUE}servtools <port> [--obf]"
-        echo ""
-        source "$zshrc_file" 2>/dev/null
+        {
+            echo ""
+            echo "# ---- SecTools additions ----"
+            echo "# HTTP server that serves files from the tools directory."
+            echo "# Usage: servtools <port> [--obf]"
+            echo "servtools() {"
+            echo '    GREEN="\e[32m"'
+            echo '    BLUE="\e[34m"'
+            echo '    NC="\e[0m"'
+            echo "    PORT=\$1"
+            echo "    if [[ \$2 == '--obf' ]]; then"
+            echo '        DIR="'"${toolsdir}"'/obfuscated"'
+            echo "    else"
+            echo '        DIR="'"${toolsdir}"'"'
+            echo "    fi"
+            echo "    IP=\$(ip -4 addr show tun0 2>/dev/null | grep -oP \"(?<=inet ).*(?=/)\")"
+            echo '    echo -e "${GREEN}Files in directory ${BLUE}[${DIR}]${NC}"'
+            echo '    ls ${DIR}'
+            echo '    echo -e "${GREEN}-------------------------------------------------------------------------${NC}"'
+            echo "    echo -e \"[OK] Starting HTTP server from \${GREEN}[\$DIR]\${NC} on \$PORT\""
+            echo "    echo -e \"[OK] Address: http://\$IP:\$PORT/\""
+            echo "    python3 -m http.server \$PORT --directory \$DIR"
+            echo "}"
+        } >> "$zshrc_file" 2>/dev/null
+        ok "servtools added. Reopen your terminal and run: ${C_BOLD}servtools <port> [--obf]${C_RESET}"
     fi
 
-
-    # Add alias for batcat
-    #if [[ $(cat "$zshrc_file" | grep -o 'alias cat') == 'alias cat' ]]; then
-    #    echo -e "${GREEN}[OK]${NC} Alias for batcat is already added."
-    #else
-    #    echo -e "${YELLOW}[INFO]${NC} Adding alias for batcat to ${user_home}/.zshrc file}"
-    #    echo "# Better cat (batcat)" >> "$zshrc_file" 2>/dev/null
-    #    echo "alias cat='batcat'" >> "$zshrc_file" 2>/dev/null
-        source "$zshrc_file" 2>/dev/null
-    #fi
-
-# Add Function to extract ports as a comma-separated list
+    # ----- extract_ports: comma-separated port list from tool output ---------
     if grep -q 'extract_ports()' "$zshrc_file" 2>/dev/null; then
-        echo -e "${GREEN}[OK]${NC} Function to extract ports is already installed"
-        echo -e "${YELLOW}[INFO]${NC} To use it, reopen terminal and type ${BLUE}extract_ports <file.txt>${NC}"
+        skip_line "extract_ports" "already added"
     else
-        echo "" >> "$zshrc_file" 2>/dev/null
-        echo "" >> "$zshrc_file" 2>/dev/null
-        echo -e "${YELLOW}[INFO]${NC} Adding the function extract_ports to ${zshrc_file}"
-        echo "# Function to extract ports as a comma-separated list" >> "$zshrc_file" 2>/dev/null
-        echo "extract_ports() {" >> "$zshrc_file" 2>/dev/null
-        echo '    if [[ -z "$1" ]]; then' >> "$zshrc_file" 2>/dev/null
-        echo '        echo "Usage: extract_ports <filename>"' >> "$zshrc_file" 2>/dev/null
-        echo '        return 1' >> "$zshrc_file" 2>/dev/null
-        echo '    fi' >> "$zshrc_file" 2>/dev/null
-        echo '    awk '"'"'{print $1}'"'"' "$1" | grep -o '"'"'^[0-9]*'"'"' | paste -sd,' >> "$zshrc_file" 2>/dev/null
-        echo "}" >> "$zshrc_file" 2>/dev/null
-        echo "" >> "$zshrc_file" 2>/dev/null
-        echo -e "${YELLOW}[INFO]${NC} Function extract_ports added successfully. Reopen the terminal to use it."
+        {
+            echo ""
+            echo "# Extract ports as a comma-separated list (e.g. from RustScan output)."
+            echo "# Usage: extract_ports <file>"
+            echo "extract_ports() {"
+            echo '    if [[ -z "$1" ]]; then'
+            echo '        echo "Usage: extract_ports <filename>"'
+            echo '        return 1'
+            echo '    fi'
+            echo "    awk '{print \$1}' \"\$1\" | grep -o '^[0-9]*' | paste -sd,"
+            echo "}"
+        } >> "$zshrc_file" 2>/dev/null
+        ok "extract_ports added. Reopen your terminal and run: ${C_BOLD}extract_ports <file>${C_RESET}"
     fi
-
 }
 
-
-###################################################################################################################
-# Menu Function
-###################################################################################################################
-
-# Function to display menu and prompt for user's choice.
+###############################################################################
+# Menu
+###############################################################################
 menu_choice() {
-    echo -e "${GREEN}[?]${BLUE} Choose an option:${NC}"
-    echo -e "${GREEN}[1]${NC} Install Tools"
-    echo -e "${GREEN}[2]${NC} Download Scripts"
-    echo -e "${GREEN}[3]${NC} Download Obfuscated Scripts"
-    echo -e "${GREEN}[4]${NC} Add Custom function"
-    echo -e "${GREEN}[5]${NC} All the above"
-    echo -e "${GREEN}[0]${NC} Exit"
-    
-    # Prompt for input
-    printf "\r${YELLOW}[INFO]${NC} Enter choice [1-5]: [0] To Exit: "
-    read -r choice
-    
-        
-    echo ""
-    case $choice in
+    printf '\n  %s%s%s %sWhat would you like to do?%s\n' "$C_CYAN" "$GLYPH_ARROW" "$C_RESET" "$C_BOLD" "$C_RESET"
+    printf '    %s1%s  Install tools\n'              "$C_CYAN" "$C_RESET"
+    printf '    %s2%s  Download scripts\n'           "$C_CYAN" "$C_RESET"
+    printf '    %s3%s  Download obfuscated scripts\n' "$C_CYAN" "$C_RESET"
+    printf '    %s4%s  Add custom shell functions\n' "$C_CYAN" "$C_RESET"
+    printf '    %s5%s  All of the above\n'           "$C_CYAN" "$C_RESET"
+    printf '    %s0%s  Exit\n'                       "$C_CYAN" "$C_RESET"
+
+    local choice
+    read -r -p "$(printf '\n  %s%s%s  Enter choice [0-5]: ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET")" choice
+
+    case "$choice" in
         1) install_tools ;;
         2) download_scripts ;;
         3) obfuscated_scripts ;;
         4) add_custom_functions ;;
-        5) 
+        5)
             install_tools
             download_scripts
             obfuscated_scripts
             add_custom_functions
             ;;
-        
-        0) 
-            echo -e "${YELLOW}[INFO]${NC} Exiting..."
+        0)
+            info "Exiting."
             exit 0
             ;;
         *)
-            echo -e "${RED}[WAR]${NC} Invalid option. Please choose a number between 0-5."
-            #menu_choice
+            warn "Invalid option. Choose a number between 0 and 5."
+            menu_choice
             ;;
-
     esac
 }
-ask_update
-ask_upgrade
-menu_choice
+
+###############################################################################
+# Main
+###############################################################################
+main() {
+    print_banner
+
+    if ! check_network; then
+        err "No network connection. Exiting."
+        exit 1
+    fi
+
+    require_dependencies
+
+    ask_update
+    ask_upgrade
+    menu_choice
+
+    printf '\n  %s%s Done.%s\n\n' "$C_GREEN" "$GLYPH_OK" "$C_RESET"
+}
+
+main "$@"
