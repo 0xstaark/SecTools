@@ -43,6 +43,11 @@ fi
 # Animate the spinner only when attached to an interactive terminal.
 if [[ -t 1 && "$USE_COLOR" -eq 1 ]]; then SPIN_ANIMATE=1; else SPIN_ANIMATE=0; fi
 
+# Always restore the cursor on exit/interrupt (the spinner hides it).
+restore_cursor() { [[ "$SPIN_ANIMATE" -eq 1 ]] && printf '\e[?25h'; }
+trap 'restore_cursor' EXIT
+trap 'restore_cursor; echo; exit 130' INT TERM
+
 NAME_WIDTH=30                                   # width of the item column
 RULE="$(printf '%.0s─' {1..52})"
 [[ "${LC_ALL:-}${LC_CTYPE:-}${LANG:-}" == *[Uu][Tt][Ff]* ]] || RULE="$(printf '%.0s-' {1..52})"
