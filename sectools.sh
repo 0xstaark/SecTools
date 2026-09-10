@@ -61,6 +61,11 @@ zshrc_file="${user_home}/.zshrc"
 user_name="${SUDO_USER:-$(whoami)}"
 LOGFILE="${startdir}/sectools.log"
 
+# Fully non-interactive apt: prevents installs (e.g. docker.io) from hanging
+# forever on debconf / needrestart prompts that would be invisible behind the
+# spinner. Keeps existing config files on conflict.
+APT_GET="sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+
 # Per-phase counters (reset at the start of each phase).
 STAT_OK=0; STAT_SKIP=0; STAT_FAIL=0
 reset_stats() { STAT_OK=0; STAT_SKIP=0; STAT_FAIL=0; }
@@ -118,11 +123,16 @@ spinner() {
     local i=0
 
     if [[ "$SPIN_ANIMATE" -eq 1 ]]; then
+        local start=$SECONDS elapsed tsuffix
         printf '\e[?25l'                                   # hide cursor
         while kill -0 "$pid" 2>/dev/null; do
-            printf '\r  %s%s%s  %-*s %s%s%s' \
+            elapsed=$((SECONDS - start))
+            # Show an elapsed timer once a task runs long, so a slow download
+            # (e.g. docker) reads as "working" rather than "frozen".
+            if [[ $elapsed -ge 2 ]]; then tsuffix=" (${elapsed}s)"; else tsuffix=""; fi
+            printf '\r  %s%s%s  %-*s %s%s%s%s' \
                 "$C_YELLOW" "${SPIN_FRAMES[i]}" "$C_RESET" \
-                "$NAME_WIDTH" "$name" "$C_DIM" "$action" "$C_RESET"
+                "$NAME_WIDTH" "$name" "$C_DIM" "$action" "$tsuffix" "$C_RESET"
             i=$(( (i + 1) % ${#SPIN_FRAMES[@]} ))
             sleep 0.08
         done
@@ -195,7 +205,7 @@ require_dependencies() {
         warn "Missing required tools: ${C_BOLD}${missing[*]}${C_RESET}"
         if command -v apt-get >/dev/null 2>&1; then
             info "Attempting to install them with apt-get..."
-            (sudo apt-get -qq -y install "${missing[@]}" >>"$LOGFILE" 2>&1) & spinner "dependencies" "installing" "ready"
+            ($APT_GET -qq -y install "${missing[@]}" >>"$LOGFILE" 2>&1) & spinner "dependencies" "installing" "ready"
         else
             err "Please install them manually and re-run this script."
             exit 1
@@ -237,7 +247,7 @@ ask_update() {
     read -r -p "$(printf '  %s%s%s  Run %ssudo apt update%s now? [y/N] ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$C_RESET")" choice
     case "$choice" in
         [Yy]*)
-            (sudo apt-get -q update >>"$LOGFILE" 2>&1) & spinner "apt update" "refreshing package lists" "updated"
+            ($APT_GET -q update >>"$LOGFILE" 2>&1) & spinner "apt update" "refreshing package lists" "updated"
             ;;
         *)
             skip_line "apt update" "skipped"
@@ -250,7 +260,7 @@ ask_upgrade() {
     read -r -p "$(printf '  %s%s%s  Run %ssudo apt upgrade%s now? [y/N] ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$C_RESET")" choice
     case "$choice" in
         [Yy]*)
-            (sudo apt-get -q -y upgrade >>"$LOGFILE" 2>&1) & spinner "apt upgrade" "upgrading packages" "upgraded"
+            ($APT_GET -q -y upgrade >>"$LOGFILE" 2>&1) & spinner "apt upgrade" "upgrading packages" "upgraded"
             ;;
         *)
             skip_line "apt upgrade" "skipped"
@@ -450,35 +460,35 @@ install_tools() {
     section "Installing tools"
 
     install_tool "seclists" \
-        "sudo apt-get -qq -y install seclists" \
+        "$APT_GET -qq -y install seclists" \
         "[[ -d /usr/share/seclists ]]"
 
     install_tool "rustscan" \
-        "sudo apt-get -qq -y install rustscan >/dev/null 2>&1; if command -v rustscan >/dev/null 2>&1; then true; else deb_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*rustscan[^\"]*\\.deb' | head -1); if [[ -z \"\$deb_url\" ]]; then deb_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*\\.deb\\.zip' | head -1); fi; if [[ \"\$deb_url\" == *.zip ]]; then wget -q --timeout=60 -O rustscan.deb.zip \"\$deb_url\" && unzip -o rustscan.deb.zip && sudo dpkg -i rustscan*.deb; rm -f rustscan.deb.zip rustscan*.deb; elif [[ -n \"\$deb_url\" ]]; then wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb; rm -f rustscan.deb; else false; fi; fi" \
+        "$APT_GET -qq -y install rustscan >/dev/null 2>&1; if command -v rustscan >/dev/null 2>&1; then true; else deb_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*rustscan[^\"]*\\.deb' | head -1); if [[ -z \"\$deb_url\" ]]; then deb_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*\\.deb\\.zip' | head -1); fi; if [[ \"\$deb_url\" == *.zip ]]; then wget -q --timeout=60 -O rustscan.deb.zip \"\$deb_url\" && unzip -o rustscan.deb.zip && sudo dpkg -i rustscan*.deb; rm -f rustscan.deb.zip rustscan*.deb; elif [[ -n \"\$deb_url\" ]]; then wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb; rm -f rustscan.deb; else false; fi; fi" \
         "command -v rustscan >/dev/null 2>&1"
 
     install_tool "wfuzz" \
-        "sudo apt-get -qq -y install wfuzz" \
+        "$APT_GET -qq -y install wfuzz" \
         "command -v wfuzz >/dev/null 2>&1"
 
     install_tool "ffuf" \
-        "sudo apt-get -qq -y install ffuf" \
+        "$APT_GET -qq -y install ffuf" \
         "command -v ffuf >/dev/null 2>&1"
 
     install_tool "bloodhound" \
-        "sudo apt-get -qq -y install bloodhound" \
+        "$APT_GET -qq -y install bloodhound" \
         "command -v bloodhound >/dev/null 2>&1"
 
     install_tool "neo4j" \
-        "sudo apt-get -qq -y install neo4j" \
+        "$APT_GET -qq -y install neo4j" \
         "command -v neo4j >/dev/null 2>&1"
 
     install_tool "gobuster" \
-        "sudo apt-get -qq -y install gobuster" \
+        "$APT_GET -qq -y install gobuster" \
         "command -v gobuster >/dev/null 2>&1"
 
     install_tool "feroxbuster" \
-        "sudo apt-get -qq -y install feroxbuster" \
+        "$APT_GET -qq -y install feroxbuster" \
         "command -v feroxbuster >/dev/null 2>&1"
 
     install_tool "certipy-ad" \
@@ -490,21 +500,54 @@ install_tools() {
         "command -v pypykatz >/dev/null 2>&1"
 
     install_tool "sublime-text" \
-        "wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg | gpg --no-default-keyring --keyring ./temp-keyring.gpg --import && gpg --no-default-keyring --keyring ./temp-keyring.gpg --export --output sublime-text.gpg && rm -f temp-keyring.gpg temp-keyring.gpg~ && sudo mkdir -p /usr/local/share/keyrings && sudo mv ./sublime-text.gpg /usr/local/share/keyrings && echo 'deb [signed-by=/usr/local/share/keyrings/sublime-text.gpg] https://download.sublimetext.com/ apt/stable/' | sudo tee /etc/apt/sources.list.d/sublime-text.list && sudo apt-get update -qq && sudo apt-get install -qq -y sublime-text" \
+        "wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg | gpg --no-default-keyring --keyring ./temp-keyring.gpg --import && gpg --no-default-keyring --keyring ./temp-keyring.gpg --export --output sublime-text.gpg && rm -f temp-keyring.gpg temp-keyring.gpg~ && sudo mkdir -p /usr/local/share/keyrings && sudo mv ./sublime-text.gpg /usr/local/share/keyrings && echo 'deb [signed-by=/usr/local/share/keyrings/sublime-text.gpg] https://download.sublimetext.com/ apt/stable/' | sudo tee /etc/apt/sources.list.d/sublime-text.list && $APT_GET update -qq && $APT_GET install -qq -y sublime-text" \
         "command -v subl >/dev/null 2>&1"
 
     install_tool "docker" \
-        "sudo apt-get -qq -y install docker.io" \
+        "$APT_GET -qq -y install docker.io" \
         "command -v docker >/dev/null 2>&1"
 
     install_tool "docker-compose" \
-        "sudo apt-get -qq -y install docker-compose" \
+        "$APT_GET -qq -y install docker-compose" \
         "command -v docker-compose >/dev/null 2>&1"
 
     install_tool "bloodhound-CE" \
         "curl -fsSL https://ghst.ly/getbhce -o /opt/bloodhoundCE/docker-compose.yml" \
         "[[ -f /opt/bloodhoundCE/docker-compose.yml ]]" \
         "sudo mkdir -p /opt/bloodhoundCE"
+
+    # --- Active Directory / network tooling (apt on Kali, pip/gem fallback) ---
+    install_tool "netexec" \
+        "$APT_GET -qq -y install netexec || sudo python3 -m pip install -q --break-system-packages netexec || sudo python3 -m pip install -q netexec" \
+        "command -v netexec >/dev/null 2>&1 || command -v nxc >/dev/null 2>&1"
+
+    install_tool "impacket" \
+        "$APT_GET -qq -y install impacket-scripts || sudo python3 -m pip install -q --break-system-packages impacket || sudo python3 -m pip install -q impacket" \
+        "command -v impacket-secretsdump >/dev/null 2>&1 || command -v secretsdump.py >/dev/null 2>&1"
+
+    install_tool "responder" \
+        "$APT_GET -qq -y install responder" \
+        "command -v responder >/dev/null 2>&1"
+
+    install_tool "mitm6" \
+        "$APT_GET -qq -y install mitm6 || sudo python3 -m pip install -q --break-system-packages mitm6 || sudo python3 -m pip install -q mitm6" \
+        "command -v mitm6 >/dev/null 2>&1"
+
+    install_tool "evil-winrm" \
+        "$APT_GET -qq -y install evil-winrm || sudo gem install evil-winrm" \
+        "command -v evil-winrm >/dev/null 2>&1"
+
+    install_tool "enum4linux-ng" \
+        "$APT_GET -qq -y install enum4linux-ng || sudo python3 -m pip install -q --break-system-packages enum4linux-ng || sudo python3 -m pip install -q enum4linux-ng" \
+        "command -v enum4linux-ng >/dev/null 2>&1"
+
+    install_tool "ldapdomaindump" \
+        "$APT_GET -qq -y install ldapdomaindump || sudo python3 -m pip install -q --break-system-packages ldapdomaindump || sudo python3 -m pip install -q ldapdomaindump" \
+        "command -v ldapdomaindump >/dev/null 2>&1"
+
+    install_tool "smbmap" \
+        "$APT_GET -qq -y install smbmap || sudo python3 -m pip install -q --break-system-packages smbmap || sudo python3 -m pip install -q smbmap" \
+        "command -v smbmap >/dev/null 2>&1"
 
     summary
 }

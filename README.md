@@ -66,6 +66,17 @@ apt package is unavailable):
 * docker
 * docker-compose
 * bloodhound-CE (docker-compose deployment under `/opt/bloodhoundCE`)
+* netexec (CrackMapExec successor)
+* impacket (secretsdump, psexec, GetNPUsers, ...)
+* responder
+* mitm6
+* evil-winrm
+* enum4linux-ng
+* ldapdomaindump
+* smbmap
+
+Active Directory / network tools are installed from the distro repo (apt) on
+Kali and fall back to `pip`/`gem` on other systems.
 
 ## Scripts
 
