@@ -58,6 +58,7 @@ RULE="$(printf '%.0s─' {1..52})"
 startdir="$(pwd)"
 user_home="$(eval echo "~${SUDO_USER:-$USER}")"
 zshrc_file="${user_home}/.zshrc"
+bashrc_file="${user_home}/.bashrc"
 user_name="${SUDO_USER:-$(whoami)}"
 LOGFILE="${startdir}/sectools.log"
 
@@ -73,6 +74,9 @@ ASSUME_YES=0        # -y : don't prompt; use defaults
 PRESET_DIR=""       # --dir PATH : download target, skips the directory prompt
 DO_UPDATE=0         # --update / -y : run apt update
 DO_UPGRADE=0        # --upgrade : run apt upgrade
+DRY_RUN=0           # --dry-run : show what would happen, change nothing
+ONLY_LIST=""        # --only a,b,c : restrict the tool phase to these tools
+SKIP_LIST=""        # --skip a,b,c : exclude these tools from the tool phase
 
 # Per-phase counters (reset at the start of each phase).
 STAT_OK=0; STAT_SKIP=0; STAT_FAIL=0
@@ -97,6 +101,18 @@ skip_line() {
     STAT_SKIP=$((STAT_SKIP + 1))
     printf '  %s%s%s  %-*s %s%s%s\n' \
         "$C_GREY" "$GLYPH_SKIP" "$C_RESET" "$NAME_WIDTH" "$1" "$C_GREY" "${2:-present}" "$C_RESET"
+}
+
+# dry_line <name> <note> - a "would do X" line for --dry-run (no counters touched)
+dry_line() {
+    printf '  %s%s%s  %-*s %s%s%s\n' \
+        "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$NAME_WIDTH" "$1" "$C_CYAN" "${2:-would install}" "$C_RESET"
+}
+
+# in_csv <name> <comma,separated,list> - true if name is an exact element
+in_csv() {
+    local csv=",${2},"
+    [[ "$csv" == *",${1},"* ]]
 }
 
 # summary  - print the ok / skipped / failed tally for the current phase
@@ -277,6 +293,7 @@ ask_upgrade() {
 git_download() {
     local repo_url="$1"
     local repo_name="$2"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$repo_name" "would clone"; return; }
     rm -rf "$repo_name" 2>/dev/null
     (git clone --depth 1 "$repo_url" "$repo_name" >>"$LOGFILE" 2>&1) & spinner "$repo_name" "cloning" "cloned"
     [[ $? -eq 0 ]] || log "clone failed: $repo_url"
@@ -289,6 +306,7 @@ folder_zip_download() {
     local zip_url="$1"
     local zip_name="$2"
     local extract_dir="${3:-${zip_name%.zip}}"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$extract_dir" "would download"; return; }
     rm -rf "$extract_dir" "$zip_name" 2>/dev/null
     (
         curl -fsSL --connect-timeout 10 --max-time 120 "$zip_url" -o "$zip_name" 2>/dev/null &&
@@ -307,6 +325,7 @@ single_file_zip_gz() {
     local file_url="$1"
     local file_name="$2"
     local label="${file_name%.*}"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$label" "would download"; return; }
     rm -f "$file_name" 2>/dev/null
     (
         curl -fsSL --connect-timeout 10 --max-time 120 "$file_url" -o "$file_name" 2>/dev/null || exit 1
@@ -329,6 +348,7 @@ api_file_check_and_download_file() {
     local api_url="$1"
     local filename="$2"
     local filter="$3"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$filename" "would download"; return; }
 
     local response file_url
     response="$(curl -fsSL --connect-timeout 10 --max-time 30 "$api_url" 2>/dev/null)"
@@ -373,6 +393,7 @@ api_file_check_and_download_file() {
 single_file_check_and_download_file() {
     local download_url="$1"
     local local_file="$2"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$local_file" "would download"; return; }
     local remote_time local_time
 
     remote_time="$(curl -fsSI --connect-timeout 10 --max-time 15 "$download_url" 2>/dev/null \
@@ -399,6 +420,7 @@ single_file_check_and_download_file() {
 download_obfuscated_scripts() {
     local download_url="$1"
     local filename="$2"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$filename" "would download"; return; }
 
     if [[ -z "$toolsdir" ]]; then
         err "toolsdir is not set."
@@ -463,6 +485,13 @@ run_as_user() {
     else
         bash -c "$1"
     fi
+}
+
+# Give a file back to the invoking user when we are root via sudo, so files we
+# write into their HOME (e.g. rc files) are not left owned by root.
+chown_user() {
+    [[ $EUID -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] || return 0
+    chown "$SUDO_USER:$(id -gn "$SUDO_USER" 2>/dev/null || echo "$SUDO_USER")" "$1" 2>/dev/null
 }
 
 ###############################################################################
@@ -589,6 +618,10 @@ define_tools() {
         "install_fzf" \
         "[[ -x \"${user_home}/.fzf/bin/fzf\" ]] || command -v fzf >/dev/null 2>&1"
 
+    tool "bat" \
+        "$APT_GET -qq -y install bat" \
+        "command -v batcat >/dev/null 2>&1 || command -v bat >/dev/null 2>&1"
+
     tool "masscan" \
         "$APT_GET -qq -y install masscan" \
         "command -v masscan >/dev/null 2>&1"
@@ -619,21 +652,40 @@ define_tools() {
 }
 
 install_tools() {
-    if [[ $UID -ne 0 ]]; then
+    [[ ${#T_NAME[@]} -eq 0 ]] && define_tools
+
+    if [[ "$DRY_RUN" -ne 1 && $UID -ne 0 ]]; then
         warn "Installing tools requires elevated privileges."
         sudo -v || { err "sudo authentication failed."; return 1; }
     fi
 
-    [[ ${#T_NAME[@]} -eq 0 ]] && define_tools
+    local i name
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        section "Installing tools (dry run)"
+        local want=0 have=0
+        for i in "${!T_NAME[@]}"; do
+            name="${T_NAME[i]}"
+            [[ -n "$ONLY_LIST" ]] && ! in_csv "$name" "$ONLY_LIST" && continue
+            [[ -n "$SKIP_LIST" ]] && in_csv "$name" "$SKIP_LIST" && { skip_line "$name" "skipped"; continue; }
+            if eval "${T_CHK[i]}" >/dev/null 2>&1; then
+                skip_line "$name" "present"; have=$((have + 1))
+            else
+                dry_line "$name" "would install"; want=$((want + 1))
+            fi
+        done
+        rule
+        info "${want} would be installed, ${have} already present"
+        return
+    fi
 
     reset_stats
     section "Installing tools"
-
-    local i
     for i in "${!T_NAME[@]}"; do
-        install_tool "${T_NAME[i]}" "${T_INST[i]}" "${T_CHK[i]}" "${T_PRE[i]}"
+        name="${T_NAME[i]}"
+        [[ -n "$ONLY_LIST" ]] && ! in_csv "$name" "$ONLY_LIST" && continue
+        [[ -n "$SKIP_LIST" ]] && in_csv "$name" "$SKIP_LIST" && { skip_line "$name" "skipped"; continue; }
+        install_tool "$name" "${T_INST[i]}" "${T_CHK[i]}" "${T_PRE[i]}"
     done
-
     summary
 }
 
@@ -658,21 +710,26 @@ choose_dir() {
 download_scripts() {
     choose_dir "/opt/tools"
 
-    if [[ -d "$toolsdir" ]]; then
-        info "Using directory: ${C_BOLD}${toolsdir}${C_RESET}"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        reset_stats
+        section "Downloading scripts to ${toolsdir} (dry run)"
     else
-        if mkdir -p "$toolsdir" >/dev/null 2>&1; then
-            info "Created directory: ${C_BOLD}${toolsdir}${C_RESET}"
+        if [[ -d "$toolsdir" ]]; then
+            info "Using directory: ${C_BOLD}${toolsdir}${C_RESET}"
         else
-            err "No permission to create ${C_BOLD}${toolsdir}${C_RESET}. Re-run with sudo."
-            return 1
+            if mkdir -p "$toolsdir" >/dev/null 2>&1; then
+                info "Created directory: ${C_BOLD}${toolsdir}${C_RESET}"
+            else
+                err "No permission to create ${C_BOLD}${toolsdir}${C_RESET}. Re-run with sudo."
+                return 1
+            fi
         fi
+
+        cd "$toolsdir" || { err "Failed to enter ${toolsdir}"; return 1; }
+
+        reset_stats
+        section "Downloading scripts to ${toolsdir}"
     fi
-
-    cd "$toolsdir" || { err "Failed to enter ${toolsdir}"; return 1; }
-
-    reset_stats
-    section "Downloading scripts to ${toolsdir}"
 
 
 
@@ -897,7 +954,7 @@ else
 fi
 
 
-    perform_cleanup
+    [[ "$DRY_RUN" -eq 1 ]] || perform_cleanup
     summary
 }
 
@@ -907,15 +964,17 @@ fi
 obfuscated_scripts() {
     choose_dir "${toolsdir:-/opt/tools}"
 
-    if [[ ! -d "$toolsdir" ]]; then
-        mkdir -p "$toolsdir" >/dev/null 2>&1 || { err "Cannot create ${C_BOLD}${toolsdir}${C_RESET}"; return 1; }
-        info "Created directory: ${C_BOLD}${toolsdir}/obfuscated${C_RESET}"
-    else
-        info "Using directory: ${C_BOLD}${toolsdir}/obfuscated${C_RESET}"
+    if [[ "$DRY_RUN" -ne 1 ]]; then
+        if [[ ! -d "$toolsdir" ]]; then
+            mkdir -p "$toolsdir" >/dev/null 2>&1 || { err "Cannot create ${C_BOLD}${toolsdir}${C_RESET}"; return 1; }
+            info "Created directory: ${C_BOLD}${toolsdir}/obfuscated${C_RESET}"
+        else
+            info "Using directory: ${C_BOLD}${toolsdir}/obfuscated${C_RESET}"
+        fi
     fi
 
     reset_stats
-    section "Downloading obfuscated payloads"
+    section "Downloading obfuscated payloads$([[ "$DRY_RUN" -eq 1 ]] && echo ' (dry run)')"
 
 # Downloading Certify.exe._obf.exe
 download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/Certify.exe._obf.exe" "Certify.exe._obf.exe"
@@ -976,6 +1035,16 @@ download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/Obfuscat
 ###############################################################################
 add_custom_functions() {
     toolsdir="${toolsdir:-/opt/tools}"
+
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        section "Adding custom shell functions (dry run)"
+        dry_line "servtools"       "would add to ~/.zshrc"
+        dry_line "extract_ports"   "would add to ~/.zshrc"
+        dry_line "cat -> bat alias" "would add to shell rc"
+        dry_line "rockyou.txt"     "would extract if present"
+        return
+    fi
+
     section "Adding custom shell functions"
 
     # ----- servtools: quick HTTP server from the tools directory -------------
@@ -1026,6 +1095,34 @@ add_custom_functions() {
             echo "}"
         } >> "$zshrc_file" 2>/dev/null
         ok "extract_ports added. Reopen your terminal and run: ${C_BOLD}extract_ports <file>${C_RESET}"
+    fi
+    chown_user "$zshrc_file"
+
+    # ----- bat: alias cat to bat (batcat on Debian/Kali) in the user shells --
+    local rc rc_files=("$zshrc_file")
+    [[ -f "$bashrc_file" ]] && rc_files+=("$bashrc_file")
+    for rc in "${rc_files[@]}"; do
+        if grep -q 'SecTools: bat alias' "$rc" 2>/dev/null; then
+            skip_line "cat->bat ($(basename "$rc"))" "already added"
+            continue
+        fi
+        {
+            echo ""
+            echo "# SecTools: bat alias - use bat as a nicer cat when available"
+            echo 'if command -v batcat >/dev/null 2>&1; then alias cat="batcat"'
+            echo 'elif command -v bat >/dev/null 2>&1; then alias cat="bat"; fi'
+        } >> "$rc" 2>/dev/null && chown_user "$rc" && ok "cat -> bat alias added to ${C_BOLD}$(basename "$rc")${C_RESET}"
+    done
+
+    # ----- rockyou wordlist: unzip the Kali-shipped archive if present -------
+    local rockyou_gz="/usr/share/wordlists/rockyou.txt.gz"
+    local rockyou_txt="/usr/share/wordlists/rockyou.txt"
+    if [[ -f "$rockyou_txt" ]]; then
+        skip_line "rockyou.txt" "already extracted"
+    elif [[ -f "$rockyou_gz" ]]; then
+        (sudo gunzip -f "$rockyou_gz" >>"$LOGFILE" 2>&1) & spinner "rockyou.txt" "extracting" "extracted"
+    else
+        skip_line "rockyou.txt" "not found"
     fi
 }
 
@@ -1093,6 +1190,10 @@ usage() {
 
   ${C_BOLD}OPTIONS${C_RESET}
     --dir PATH        Download target (default /opt/tools); skips the prompt
+    --only a,b,c      Tool phase: install only these tools
+    --skip a,b,c      Tool phase: skip these tools
+    --dry-run         Show what would happen; change nothing
+    --list            List the tool inventory and exit
     --update          Run 'apt update' before the actions
     --upgrade         Run 'apt upgrade' before the actions
     -y, --yes         Non-interactive: assume defaults and run 'apt update'
@@ -1102,17 +1203,34 @@ usage() {
 
   ${C_BOLD}EXAMPLES${C_RESET}
     sudo ./sectools.sh --all -y
-    sudo ./sectools.sh --tools
+    sudo ./sectools.sh --tools --only netexec,impacket,bloodhound
+    sudo ./sectools.sh --tools --skip docker,docker-compose
+    sudo ./sectools.sh --all --dry-run
     sudo ./sectools.sh --scripts --dir /opt/tools -y
 
 EOF
+}
+
+# list_inventory - print the tool registry and exit (no network, no install)
+list_inventory() {
+    [[ ${#T_NAME[@]} -eq 0 ]] && define_tools
+    printf '\n  %s%s%s %s%s%s\n' "$C_CYAN" "$GLYPH_ARROW" "$C_RESET" "$C_BOLD" "Tools (${#T_NAME[@]})" "$C_RESET"
+    rule
+    local i
+    for i in "${!T_NAME[@]}"; do
+        printf '    %s%s%s %s\n' "$C_CYAN" "$GLYPH_SKIP" "$C_RESET" "${T_NAME[i]}"
+    done
+    rule
+    info "Filter with ${C_BOLD}--only${C_RESET} / ${C_BOLD}--skip${C_RESET}; preview with ${C_BOLD}--dry-run${C_RESET}."
+    info "Scripts and obfuscated payloads are fetched by ${C_BOLD}--scripts${C_RESET} / ${C_BOLD}--obfuscated${C_RESET}."
+    echo
 }
 
 ###############################################################################
 # Main
 ###############################################################################
 main() {
-    local actions=()
+    local actions=() do_list=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1123,6 +1241,12 @@ main() {
             --all)         actions+=(tools scripts obfuscated functions) ;;
             --dir)         shift; PRESET_DIR="${1:-}"; [[ -z "$PRESET_DIR" ]] && { err "--dir requires a path"; exit 2; } ;;
             --dir=*)       PRESET_DIR="${1#*=}" ;;
+            --only)        shift; ONLY_LIST="${1:-}"; [[ -z "$ONLY_LIST" ]] && { err "--only requires a comma-separated list"; exit 2; } ;;
+            --only=*)      ONLY_LIST="${1#*=}" ;;
+            --skip)        shift; SKIP_LIST="${1:-}"; [[ -z "$SKIP_LIST" ]] && { err "--skip requires a comma-separated list"; exit 2; } ;;
+            --skip=*)      SKIP_LIST="${1#*=}" ;;
+            --dry-run)     DRY_RUN=1 ;;
+            --list)        do_list=1 ;;
             --update)      DO_UPDATE=1 ;;
             --upgrade)     DO_UPGRADE=1 ;;
             -y|--yes)      ASSUME_YES=1; DO_UPDATE=1 ;;
@@ -1135,19 +1259,26 @@ main() {
         shift
     done
 
+    if [[ "$do_list" -eq 1 ]]; then
+        list_inventory
+        exit 0
+    fi
+
     print_banner
 
-    if ! check_network; then
+    # A dry run makes no changes, so it needs neither network nor privileges;
+    # still verify connectivity for real runs.
+    if [[ "$DRY_RUN" -ne 1 ]] && ! check_network; then
         err "No network connection. Exiting."
         exit 1
     fi
 
-    require_dependencies
+    [[ "$DRY_RUN" -eq 1 ]] || require_dependencies
 
     if [[ ${#actions[@]} -gt 0 ]]; then
         # Non-interactive run driven by flags.
-        [[ "$DO_UPDATE"  -eq 1 ]] && run_update
-        [[ "$DO_UPGRADE" -eq 1 ]] && run_upgrade
+        [[ "$DRY_RUN" -ne 1 && "$DO_UPDATE"  -eq 1 ]] && run_update
+        [[ "$DRY_RUN" -ne 1 && "$DO_UPGRADE" -eq 1 ]] && run_upgrade
         local a
         for a in "${actions[@]}"; do
             case "$a" in

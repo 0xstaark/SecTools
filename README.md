@@ -42,10 +42,20 @@ sudo ./sectools.sh --scripts --dir /opt/tools -y   # download scripts to a set d
 | `--tools` / `--scripts` / `--obfuscated` / `--functions` | Run that phase (combine freely) |
 | `--all` | All of the above |
 | `--dir PATH` | Download target directory; skips the prompt |
+| `--only a,b,c` | Tool phase: install only these tools |
+| `--skip a,b,c` | Tool phase: skip these tools |
+| `--dry-run` | Show what would happen; change nothing |
+| `--list` | Print the tool inventory and exit |
 | `--update` / `--upgrade` | Run `apt update` / `apt upgrade` first |
 | `-y`, `--yes` | Assume defaults, run non-interactively |
 | `--no-color` | Disable colour and animation |
 | `-h`, `--help` / `-V`, `--version` | Help / version |
+
+```
+sudo ./sectools.sh --tools --only netexec,impacket,bloodhound
+sudo ./sectools.sh --tools --skip docker,docker-compose
+sudo ./sectools.sh --all --dry-run
+```
 
 ### Output and logging
 
@@ -68,6 +78,10 @@ sudo ./sectools.sh --scripts --dir /opt/tools -y   # download scripts to a set d
   ```
   extract_ports <file>
   ```
+* **`cat` &rarr; `bat`** &mdash; adds `alias cat` to `~/.zshrc` and `~/.bashrc`
+  (uses `batcat` on Debian/Kali, `bat` elsewhere) when `bat` is installed.
+* **rockyou** &mdash; if `/usr/share/wordlists/rockyou.txt.gz` is present and not
+  yet extracted, it is gunzipped to `rockyou.txt`.
 
 ## Tools
 
@@ -98,6 +112,7 @@ apt package is unavailable):
 * smbmap
 * pipx
 * fzf (installed into the invoking user's `~/.fzf`, not root's)
+* bat (aliased to `cat`; see shell functions above)
 * masscan
 * nuclei
 * httpx (ProjectDiscovery)
