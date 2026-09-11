@@ -1,9 +1,10 @@
 # SecTools
 
-A single interactive script that bootstraps a pentest workstation: it installs
-common offensive-security tools from apt/pip, pulls a curated set of scripts and
+A script that bootstraps a pentest workstation: it installs common
+offensive-security tools from apt/pip, pulls a curated set of scripts and
 binaries into a working directory of your choice, and adds a couple of handy
-shell helpers.
+shell helpers. It runs interactively via a menu, or non-interactively with
+command-line flags.
 
 ## Usage
 
@@ -13,8 +14,8 @@ chmod +x sectools.sh
 sudo ./sectools.sh
 ```
 
-On launch you can optionally run `apt update` / `apt upgrade`, then pick from the
-menu:
+With no arguments, you can optionally run `apt update` / `apt upgrade`, then pick
+from the menu:
 
 | Option | Action |
 | ------ | ------ |
@@ -24,6 +25,27 @@ menu:
 | 4 | Add custom shell functions |
 | 5 | All of the above |
 | 0 | Exit |
+
+### Non-interactive mode
+
+Pass one or more action flags to run without the menu (useful for VM
+provisioning or unattended setup):
+
+```
+sudo ./sectools.sh --all -y                       # everything, assume defaults
+sudo ./sectools.sh --tools                         # just install tools
+sudo ./sectools.sh --scripts --dir /opt/tools -y   # download scripts to a set dir
+```
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--tools` / `--scripts` / `--obfuscated` / `--functions` | Run that phase (combine freely) |
+| `--all` | All of the above |
+| `--dir PATH` | Download target directory; skips the prompt |
+| `--update` / `--upgrade` | Run `apt update` / `apt upgrade` first |
+| `-y`, `--yes` | Assume defaults, run non-interactively |
+| `--no-color` | Disable colour and animation |
+| `-h`, `--help` / `-V`, `--version` | Help / version |
 
 ### Output and logging
 
@@ -74,9 +96,20 @@ apt package is unavailable):
 * enum4linux-ng
 * ldapdomaindump
 * smbmap
+* pipx
+* masscan
+* nuclei
+* httpx (ProjectDiscovery)
+* subfinder
+* coercer
+* bloodyAD
+* ligolo-ng (pivoting; apt or GitHub release)
 
 Active Directory / network tools are installed from the distro repo (apt) on
-Kali and fall back to `pip`/`gem` on other systems.
+Kali and fall back to `pip`/`gem`/GitHub release on other systems.
+
+The full tool list lives in a single registry table near the top of
+`install_tools` in `sectools.sh`; adding a tool is a one-line `tool ...` entry.
 
 ## Scripts
 
