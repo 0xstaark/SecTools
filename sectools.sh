@@ -451,6 +451,31 @@ install_tool() {
 }
 
 ###############################################################################
+# Run a command as the invoking (non-root) user
+#
+# The script is normally run with sudo, but some tools must be installed into
+# the user's own HOME and shell config, not root's. When we are root via sudo,
+# drop back to $SUDO_USER (with -H so $HOME is theirs); otherwise run directly.
+###############################################################################
+run_as_user() {
+    if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+        sudo -u "$SUDO_USER" -H bash -c "$1"
+    else
+        bash -c "$1"
+    fi
+}
+
+###############################################################################
+# fzf - installed in the context of the user (never root), non-interactively
+###############################################################################
+install_fzf() {
+    local target="${user_home}/.fzf"
+    # --all runs the installer non-interactively (key bindings + completion +
+    # rc update) so it never blocks on prompts behind the spinner.
+    run_as_user "rm -rf '$target' && git clone --depth 1 https://github.com/junegunn/fzf.git '$target' && '$target'/install --all"
+}
+
+###############################################################################
 # Phase: install tools
 ###############################################################################
 # -----------------------------------------------------------------------------
@@ -559,6 +584,10 @@ define_tools() {
     tool "pipx" \
         "$APT_GET -qq -y install pipx || sudo python3 -m pip install -q --break-system-packages pipx" \
         "command -v pipx >/dev/null 2>&1"
+
+    tool "fzf" \
+        "install_fzf" \
+        "[[ -x \"${user_home}/.fzf/bin/fzf\" ]] || command -v fzf >/dev/null 2>&1"
 
     tool "masscan" \
         "$APT_GET -qq -y install masscan" \

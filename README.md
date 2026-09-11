@@ -97,6 +97,7 @@ apt package is unavailable):
 * ldapdomaindump
 * smbmap
 * pipx
+* fzf (installed into the invoking user's `~/.fzf`, not root's)
 * masscan
 * nuclei
 * httpx (ProjectDiscovery)
