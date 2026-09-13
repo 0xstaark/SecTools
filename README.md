@@ -68,11 +68,14 @@ ends with an `ok / skipped / failed` summary, and failures are recorded in
 <details>
 <summary><b>Tools</b> (apt on Kali, with pip/gem/GitHub-release fallbacks)</summary>
 
-seclists · rustscan · wfuzz · ffuf · bloodhound · neo4j · gobuster ·
-feroxbuster · certipy-ad · pypykatz · sublime-text · docker · docker-compose ·
-bloodhound-CE · netexec · impacket · responder · mitm6 · evil-winrm ·
-enum4linux-ng · ldapdomaindump · smbmap · pipx · fzf · bat · masscan · nuclei ·
-httpx · subfinder · coercer · bloodyAD · ligolo-ng
+seclists · rustscan · wfuzz · ffuf · gobuster · feroxbuster · certipy-ad ·
+pypykatz · sublime-text · docker · docker-compose · bloodhound-CE · netexec ·
+impacket · responder · mitm6 · evil-winrm · enum4linux-ng · ldapdomaindump ·
+smbmap · pipx · fzf · bat · masscan · nuclei · httpx · subfinder · coercer ·
+bloodyAD · ligolo-ng
+
+BloodHound is installed as **Community Edition** (`bloodhound-CE`), which brings
+its own neo4j in its Docker stack &mdash; no standalone neo4j is installed.
 
 `fzf` and `bat` are installed for the invoking user (not root); `bat` is aliased
 to `cat` in `~/.zshrc` and `~/.bashrc`.
