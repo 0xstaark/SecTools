@@ -1,137 +1,119 @@
-# SecTools
+<p align="center">
+  <img src="assets/sectools.svg" alt="SecTools" width="660">
+</p>
 
-A single interactive script that bootstraps a pentest workstation: it installs
-common offensive-security tools from apt/pip, pulls a curated set of scripts and
-binaries into a working directory of your choice, and adds a couple of handy
-shell helpers.
+<p align="center">
+  <img alt="Shell" src="https://img.shields.io/badge/shell-bash-121011?logo=gnubash&logoColor=white">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Kali%20%7C%20Debian-1793d1">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+  <a href="https://github.com/0xstaark/SecTools/actions/workflows/shellcheck.yml"><img alt="ShellCheck" src="https://github.com/0xstaark/SecTools/actions/workflows/shellcheck.yml/badge.svg"></a>
+</p>
+
+<p align="center">
+  A single script that bootstraps a pentest workstation &mdash; installs common
+  offensive-security tools, fetches a curated set of scripts and binaries, and
+  adds a few shell quality-of-life helpers.
+</p>
+
+---
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/0xstaark/SecTools/main/sectools.sh -o sectools.sh && chmod +x sectools.sh && sudo ./sectools.sh
+```
+
+This downloads the script to a file first so you can review it before running it
+with root &mdash; recommended over piping straight into a shell. Prefer `wget`?
+
+```bash
+wget -q https://raw.githubusercontent.com/0xstaark/SecTools/main/sectools.sh
+chmod +x sectools.sh && sudo ./sectools.sh
+```
+
+Requires a Debian-based distribution (built for **Kali**). `curl`, `wget`,
+`unzip`, and `git` are pulled in automatically if missing.
 
 ## Usage
 
+Run with no arguments for an interactive menu, or drive it non-interactively
+with flags:
+
+```bash
+sudo ./sectools.sh --all -y                       # everything, unattended
+sudo ./sectools.sh --tools --only netexec,impacket # a subset of tools
+sudo ./sectools.sh --all --dry-run                 # preview, change nothing
+sudo ./sectools.sh --list                          # list available tools
 ```
-wget -q https://github.com/0xstaark/SecTools/raw/refs/heads/main/sectools.sh
-chmod +x sectools.sh
-sudo ./sectools.sh
-```
 
-On launch you can optionally run `apt update` / `apt upgrade`, then pick from the
-menu:
+| Flag | Description |
+| ---- | ----------- |
+| `--tools` `--scripts` `--obfuscated` `--functions` | Run a phase (combine freely) |
+| `--all` | Run every phase |
+| `--dir PATH` | Download target (default `/opt/tools`) |
+| `--only a,b` / `--skip a,b` | Install only / skip named tools |
+| `--dry-run` | Show what would happen, change nothing |
+| `--list` | Print the tool inventory and exit |
+| `--update` / `--upgrade` | `apt update` / `apt upgrade` first |
+| `-y, --yes` | Assume defaults (non-interactive) |
+| `--no-color` | Plain output |
+| `-h, --help` / `-V, --version` | Help / version |
 
-| Option | Action |
-| ------ | ------ |
-| 1 | Install tools |
-| 2 | Download scripts |
-| 3 | Download obfuscated scripts |
-| 4 | Add custom shell functions |
-| 5 | All of the above |
-| 0 | Exit |
+Output auto-adapts to the terminal (colour, Unicode, `NO_COLOR`), each phase
+ends with an `ok / skipped / failed` summary, and failures are recorded in
+`sectools.log` in the launch directory.
 
-### Output and logging
+## What it sets up
 
-* Colour and Unicode are auto-detected. When the output is piped or the terminal
-  is limited, the script falls back to plain ASCII, and `NO_COLOR` is honoured.
-* Each item prints a single aligned status line, and every phase ends with an
-  `ok / skipped / failed` summary.
-* Failures are recorded in `sectools.log` (in the directory you launched from)
-  instead of being printed to the screen.
+<details>
+<summary><b>Tools</b> (apt on Kali, with pip/gem/GitHub-release fallbacks)</summary>
 
-## Shell functions added to `~/.zshrc`
+seclists · rustscan · wfuzz · ffuf · bloodhound · neo4j · gobuster ·
+feroxbuster · certipy-ad · pypykatz · sublime-text · docker · docker-compose ·
+bloodhound-CE · netexec · impacket · responder · mitm6 · evil-winrm ·
+enum4linux-ng · ldapdomaindump · smbmap · pipx · fzf · bat · masscan · nuclei ·
+httpx · subfinder · coercer · bloodyAD · ligolo-ng
 
-* **servtools** &mdash; start an HTTP server from the tools directory.
-  ```
-  servtools <port>          # serve the tools directory
-  servtools <port> --obf    # serve the obfuscated sub-folder
-  ```
-* **extract_ports** &mdash; turn tool output (e.g. RustScan) into a
-  comma-separated port list.
-  ```
-  extract_ports <file>
-  ```
+`fzf` and `bat` are installed for the invoking user (not root); `bat` is aliased
+to `cat` in `~/.zshrc` and `~/.bashrc`.
+</details>
 
-## Tools
+<details>
+<summary><b>Scripts &amp; binaries</b> (downloaded to your tools directory)</summary>
 
-Installed via apt/pip (RustScan falls back to the latest GitHub `.deb` if the
-apt package is unavailable):
+**Windows / AD:** SharpHound, Rubeus, Certify, Seatbelt, Whisker, SharpMapExec,
+SharpChisel, ADCSPwn, BetterSafetyKatz, PassTheCert, SharPersist, ADSearch,
+SharpSCCM, Snaffler, mimikatz, Inveigh, nc.exe / nc64.exe, RunasCs, Rubeus,
+PowerView, PowerUp, PowerUpSQL, LAPSToolkit, MailSniper, Invoke-Mimikatz,
+Invoke-DCOM, Invoke-RunasCs, powercat
 
-* seclists
-* rustscan
-* wfuzz
-* ffuf
-* bloodhound
-* neo4j
-* gobuster
-* feroxbuster
-* certipy-ad
-* pypykatz
-* sublime-text
-* docker
-* docker-compose
-* bloodhound-CE (docker-compose deployment under `/opt/bloodhoundCE`)
+**Linux / privesc:** linpeas, winPEAS (x64 / any), pspy32 / pspy64,
+linux-exploit-suggester, linuxprivchecker, LinEnum, chisel, PlumHound
 
-## Scripts
+**Release / repo:** kerbrute, PSTools, AutoRecon, PetitPotam, PassTheCert,
+SprayingToolkit, BloodHound.py
 
-Downloaded into your chosen tools directory (default `/opt/tools`). Latest
-releases are fetched from GitHub where available:
+**Obfuscated builds** (`--obfuscated`): the Flangvik ObfuscatedSharpCollection
+set, saved to an `obfuscated/` sub-folder.
+</details>
 
-* mimikatz.exe
-* SharpHound.exe
-* winPEASx64.exe
-* winPEASany.exe
-* linpeas.sh
-* pspy32
-* pspy64
-* kerbrute_linux_amd64
-* kerbrute_windows_amd64.exe
-* powercat.ps1
-* Invoke-Mimikatz.ps1
-* PowerView.ps1
-* PowerUp.ps1
-* Rubeus.exe
-* Inveigh.ps1
-* nc64.exe
-* nc.exe
-* PlumHound.py
-* linux-exploit-suggester.sh
-* linuxprivchecker.py
-* LinEnum.sh
-* Whisker.exe
-* SharpMapExec.exe
-* SharpChisel.exe
-* Seatbelt.exe
-* ADCSPwn.exe
-* BetterSafetyKatz.exe
-* PassTheCert.exe
-* SharPersist.exe
-* MailSniper.ps1
-* ADSearch.exe
-* Invoke-DCOM.ps1
-* PowerUpSQL.ps1
-* SharpSCCM.exe
-* LAPSToolkit.ps1
-* Certify.exe
-* Inveigh.exe
-* Invoke-RunasCs.ps1
-* Snaffler.exe
-* chisel
-* PSTools
-* RunasCs.exe
-* AutoRecon
-* PassTheCert
-* PetitPotam
-* SprayingToolkit
-* BloodHound.py
+<details>
+<summary><b>Shell helpers</b> (added to <code>~/.zshrc</code>)</summary>
 
-## Obfuscated payloads
+- `servtools <port> [--obf]` &mdash; HTTP server from the tools directory
+- `extract_ports <file>` &mdash; comma-separated port list from tool output
+- `cat` aliased to `bat`/`batcat` when installed
+- `rockyou.txt.gz` unzipped in place if present
+</details>
 
-Option 3 downloads obfuscated builds from
-[ObfuscatedSharpCollection](https://github.com/Flangvik/ObfuscatedSharpCollection)
-into an `obfuscated/` sub-folder of your tools directory:
+## Disclaimer
 
-* Certify, Rubeus, Seatbelt, SharpEDRChecker, SharpHound, SharpSCCM, SharpView,
-  Snaffler, StickyNotesExtract, Whisker, winPEAS, SharpWebServer, SharpNoPSExec,
-  SharpMapExec, SharpKatz, ADCSPwn, ADCollector
+For authorised security testing, research, and educational use only. You are
+responsible for complying with all applicable laws and for having explicit
+permission to test any system. The authors accept no liability for misuse.
 
-## Credits
+## License
 
-Created by [0xstaark](https://github.com/0xstaark).
+Released under the [MIT License](LICENSE).
 
-> For authorised security testing and educational use only.
+<p align="center"><sub>Created by <a href="https://github.com/0xstaark">0xstaark</a></sub></p>

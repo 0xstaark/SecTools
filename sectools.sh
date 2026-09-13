@@ -58,8 +58,25 @@ RULE="$(printf '%.0s─' {1..52})"
 startdir="$(pwd)"
 user_home="$(eval echo "~${SUDO_USER:-$USER}")"
 zshrc_file="${user_home}/.zshrc"
+bashrc_file="${user_home}/.bashrc"
 user_name="${SUDO_USER:-$(whoami)}"
 LOGFILE="${startdir}/sectools.log"
+
+# Fully non-interactive apt: prevents installs (e.g. docker.io) from hanging
+# forever on debconf / needrestart prompts that would be invisible behind the
+# spinner. Keeps existing config files on conflict.
+APT_GET="sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+
+SECTOOLS_VERSION="2.0"
+
+# Runtime flags (overridden by CLI arguments in main()).
+ASSUME_YES=0        # -y : don't prompt; use defaults
+PRESET_DIR=""       # --dir PATH : download target, skips the directory prompt
+DO_UPDATE=0         # --update / -y : run apt update
+DO_UPGRADE=0        # --upgrade : run apt upgrade
+DRY_RUN=0           # --dry-run : show what would happen, change nothing
+ONLY_LIST=""        # --only a,b,c : restrict the tool phase to these tools
+SKIP_LIST=""        # --skip a,b,c : exclude these tools from the tool phase
 
 # Per-phase counters (reset at the start of each phase).
 STAT_OK=0; STAT_SKIP=0; STAT_FAIL=0
@@ -84,6 +101,18 @@ skip_line() {
     STAT_SKIP=$((STAT_SKIP + 1))
     printf '  %s%s%s  %-*s %s%s%s\n' \
         "$C_GREY" "$GLYPH_SKIP" "$C_RESET" "$NAME_WIDTH" "$1" "$C_GREY" "${2:-present}" "$C_RESET"
+}
+
+# dry_line <name> <note> - a "would do X" line for --dry-run (no counters touched)
+dry_line() {
+    printf '  %s%s%s  %-*s %s%s%s\n' \
+        "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$NAME_WIDTH" "$1" "$C_CYAN" "${2:-would install}" "$C_RESET"
+}
+
+# in_csv <name> <comma,separated,list> - true if name is an exact element
+in_csv() {
+    local csv=",${2},"
+    [[ "$csv" == *",${1},"* ]]
 }
 
 # summary  - print the ok / skipped / failed tally for the current phase
@@ -118,11 +147,16 @@ spinner() {
     local i=0
 
     if [[ "$SPIN_ANIMATE" -eq 1 ]]; then
+        local start=$SECONDS elapsed tsuffix
         printf '\e[?25l'                                   # hide cursor
         while kill -0 "$pid" 2>/dev/null; do
-            printf '\r  %s%s%s  %-*s %s%s%s' \
+            elapsed=$((SECONDS - start))
+            # Show an elapsed timer once a task runs long, so a slow download
+            # (e.g. docker) reads as "working" rather than "frozen".
+            if [[ $elapsed -ge 2 ]]; then tsuffix=" (${elapsed}s)"; else tsuffix=""; fi
+            printf '\r  %s%s%s  %-*s %s%s%s%s' \
                 "$C_YELLOW" "${SPIN_FRAMES[i]}" "$C_RESET" \
-                "$NAME_WIDTH" "$name" "$C_DIM" "$action" "$C_RESET"
+                "$NAME_WIDTH" "$name" "$C_DIM" "$action" "$tsuffix" "$C_RESET"
             i=$(( (i + 1) % ${#SPIN_FRAMES[@]} ))
             sleep 0.08
         done
@@ -195,7 +229,7 @@ require_dependencies() {
         warn "Missing required tools: ${C_BOLD}${missing[*]}${C_RESET}"
         if command -v apt-get >/dev/null 2>&1; then
             info "Attempting to install them with apt-get..."
-            (sudo apt-get -qq -y install "${missing[@]}" >>"$LOGFILE" 2>&1) & spinner "dependencies" "installing" "ready"
+            ($APT_GET -qq -y install "${missing[@]}" >>"$LOGFILE" 2>&1) & spinner "dependencies" "installing" "ready"
         else
             err "Please install them manually and re-run this script."
             exit 1
@@ -232,16 +266,15 @@ perform_cleanup() {
 ###############################################################################
 # System update / upgrade prompts
 ###############################################################################
+run_update()  { ($APT_GET -q update >>"$LOGFILE" 2>&1)    & spinner "apt update"  "refreshing package lists" "updated"; }
+run_upgrade() { ($APT_GET -q -y upgrade >>"$LOGFILE" 2>&1) & spinner "apt upgrade" "upgrading packages"      "upgraded"; }
+
 ask_update() {
     local choice
     read -r -p "$(printf '  %s%s%s  Run %ssudo apt update%s now? [y/N] ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$C_RESET")" choice
     case "$choice" in
-        [Yy]*)
-            (sudo apt-get -q update >>"$LOGFILE" 2>&1) & spinner "apt update" "refreshing package lists" "updated"
-            ;;
-        *)
-            skip_line "apt update" "skipped"
-            ;;
+        [Yy]*) run_update ;;
+        *)     skip_line "apt update" "skipped" ;;
     esac
 }
 
@@ -249,12 +282,8 @@ ask_upgrade() {
     local choice
     read -r -p "$(printf '  %s%s%s  Run %ssudo apt upgrade%s now? [y/N] ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$C_RESET")" choice
     case "$choice" in
-        [Yy]*)
-            (sudo apt-get -q -y upgrade >>"$LOGFILE" 2>&1) & spinner "apt upgrade" "upgrading packages" "upgraded"
-            ;;
-        *)
-            skip_line "apt upgrade" "skipped"
-            ;;
+        [Yy]*) run_upgrade ;;
+        *)     skip_line "apt upgrade" "skipped" ;;
     esac
 }
 
@@ -264,6 +293,7 @@ ask_upgrade() {
 git_download() {
     local repo_url="$1"
     local repo_name="$2"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$repo_name" "would clone"; return; }
     rm -rf "$repo_name" 2>/dev/null
     (git clone --depth 1 "$repo_url" "$repo_name" >>"$LOGFILE" 2>&1) & spinner "$repo_name" "cloning" "cloned"
     [[ $? -eq 0 ]] || log "clone failed: $repo_url"
@@ -276,6 +306,7 @@ folder_zip_download() {
     local zip_url="$1"
     local zip_name="$2"
     local extract_dir="${3:-${zip_name%.zip}}"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$extract_dir" "would download"; return; }
     rm -rf "$extract_dir" "$zip_name" 2>/dev/null
     (
         curl -fsSL --connect-timeout 10 --max-time 120 "$zip_url" -o "$zip_name" 2>/dev/null &&
@@ -294,6 +325,7 @@ single_file_zip_gz() {
     local file_url="$1"
     local file_name="$2"
     local label="${file_name%.*}"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$label" "would download"; return; }
     rm -f "$file_name" 2>/dev/null
     (
         curl -fsSL --connect-timeout 10 --max-time 120 "$file_url" -o "$file_name" 2>/dev/null || exit 1
@@ -316,6 +348,7 @@ api_file_check_and_download_file() {
     local api_url="$1"
     local filename="$2"
     local filter="$3"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$filename" "would download"; return; }
 
     local response file_url
     response="$(curl -fsSL --connect-timeout 10 --max-time 30 "$api_url" 2>/dev/null)"
@@ -360,6 +393,7 @@ api_file_check_and_download_file() {
 single_file_check_and_download_file() {
     local download_url="$1"
     local local_file="$2"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$local_file" "would download"; return; }
     local remote_time local_time
 
     remote_time="$(curl -fsSI --connect-timeout 10 --max-time 15 "$download_url" 2>/dev/null \
@@ -386,6 +420,7 @@ single_file_check_and_download_file() {
 download_obfuscated_scripts() {
     local download_url="$1"
     local filename="$2"
+    [[ "$DRY_RUN" -eq 1 ]] && { dry_line "$filename" "would download"; return; }
 
     if [[ -z "$toolsdir" ]]; then
         err "toolsdir is not set."
@@ -438,101 +473,263 @@ install_tool() {
 }
 
 ###############################################################################
+# Run a command as the invoking (non-root) user
+#
+# The script is normally run with sudo, but some tools must be installed into
+# the user's own HOME and shell config, not root's. When we are root via sudo,
+# drop back to $SUDO_USER (with -H so $HOME is theirs); otherwise run directly.
+###############################################################################
+run_as_user() {
+    if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+        sudo -u "$SUDO_USER" -H bash -c "$1"
+    else
+        bash -c "$1"
+    fi
+}
+
+# Give a file back to the invoking user when we are root via sudo, so files we
+# write into their HOME (e.g. rc files) are not left owned by root.
+chown_user() {
+    [[ $EUID -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] || return 0
+    chown "$SUDO_USER:$(id -gn "$SUDO_USER" 2>/dev/null || echo "$SUDO_USER")" "$1" 2>/dev/null
+}
+
+###############################################################################
+# fzf - installed in the context of the user (never root), non-interactively
+###############################################################################
+install_fzf() {
+    local target="${user_home}/.fzf"
+    # --all runs the installer non-interactively (key bindings + completion +
+    # rc update) so it never blocks on prompts behind the spinner.
+    run_as_user "rm -rf '$target' && git clone --depth 1 https://github.com/junegunn/fzf.git '$target' && '$target'/install --all"
+}
+
+###############################################################################
 # Phase: install tools
 ###############################################################################
-install_tools() {
-    if [[ $UID -ne 0 ]]; then
-        warn "Installing tools requires elevated privileges."
-        sudo -v || { err "sudo authentication failed."; return 1; }
-    fi
+# -----------------------------------------------------------------------------
+# Tool registry
+#
+#   tool <name> <install-cmd> <check-cmd> [<pre-install-cmd>]
+#
+# Everything the installer knows lives in this table. Adding a tool is a single
+# `tool ...` line below; the installer loop and the menu pick it up automatically.
+# -----------------------------------------------------------------------------
+T_NAME=(); T_INST=(); T_CHK=(); T_PRE=()
+tool() { T_NAME+=("$1"); T_INST+=("$2"); T_CHK+=("$3"); T_PRE+=("${4:-}"); }
 
-    reset_stats
-    section "Installing tools"
-
-    install_tool "seclists" \
-        "sudo apt-get -qq -y install seclists" \
+define_tools() {
+    tool "seclists" \
+        "$APT_GET -qq -y install seclists" \
         "[[ -d /usr/share/seclists ]]"
 
-    install_tool "rustscan" \
-        "sudo apt-get -qq -y install rustscan >/dev/null 2>&1; if command -v rustscan >/dev/null 2>&1; then true; else deb_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*rustscan[^\"]*\\.deb' | head -1); if [[ -z \"\$deb_url\" ]]; then deb_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*\\.deb\\.zip' | head -1); fi; if [[ \"\$deb_url\" == *.zip ]]; then wget -q --timeout=60 -O rustscan.deb.zip \"\$deb_url\" && unzip -o rustscan.deb.zip && sudo dpkg -i rustscan*.deb; rm -f rustscan.deb.zip rustscan*.deb; elif [[ -n \"\$deb_url\" ]]; then wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb; rm -f rustscan.deb; else false; fi; fi" \
+    tool "rustscan" \
+        "$APT_GET -qq -y install rustscan >/dev/null 2>&1; if command -v rustscan >/dev/null 2>&1; then true; else deb_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*rustscan[^\"]*\\.deb' | head -1); if [[ -z \"\$deb_url\" ]]; then deb_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/RustScan/RustScan/releases/latest | grep -o 'https://[^\"]*\\.deb\\.zip' | head -1); fi; if [[ \"\$deb_url\" == *.zip ]]; then wget -q --timeout=60 -O rustscan.deb.zip \"\$deb_url\" && unzip -o rustscan.deb.zip && sudo dpkg -i rustscan*.deb; rm -f rustscan.deb.zip rustscan*.deb; elif [[ -n \"\$deb_url\" ]]; then wget -q --timeout=60 -O rustscan.deb \"\$deb_url\" && sudo dpkg -i rustscan.deb; rm -f rustscan.deb; else false; fi; fi" \
         "command -v rustscan >/dev/null 2>&1"
 
-    install_tool "wfuzz" \
-        "sudo apt-get -qq -y install wfuzz" \
+    tool "wfuzz" \
+        "$APT_GET -qq -y install wfuzz" \
         "command -v wfuzz >/dev/null 2>&1"
 
-    install_tool "ffuf" \
-        "sudo apt-get -qq -y install ffuf" \
+    tool "ffuf" \
+        "$APT_GET -qq -y install ffuf" \
         "command -v ffuf >/dev/null 2>&1"
 
-    install_tool "bloodhound" \
-        "sudo apt-get -qq -y install bloodhound" \
+    tool "bloodhound" \
+        "$APT_GET -qq -y install bloodhound" \
         "command -v bloodhound >/dev/null 2>&1"
 
-    install_tool "neo4j" \
-        "sudo apt-get -qq -y install neo4j" \
+    tool "neo4j" \
+        "$APT_GET -qq -y install neo4j" \
         "command -v neo4j >/dev/null 2>&1"
 
-    install_tool "gobuster" \
-        "sudo apt-get -qq -y install gobuster" \
+    tool "gobuster" \
+        "$APT_GET -qq -y install gobuster" \
         "command -v gobuster >/dev/null 2>&1"
 
-    install_tool "feroxbuster" \
-        "sudo apt-get -qq -y install feroxbuster" \
+    tool "feroxbuster" \
+        "$APT_GET -qq -y install feroxbuster" \
         "command -v feroxbuster >/dev/null 2>&1"
 
-    install_tool "certipy-ad" \
+    tool "certipy-ad" \
         "sudo python3 -m pip install -q --break-system-packages certipy-ad || sudo python3 -m pip install -q certipy-ad" \
         "command -v certipy-ad >/dev/null 2>&1"
 
-    install_tool "pypykatz" \
+    tool "pypykatz" \
         "sudo python3 -m pip install -q --break-system-packages pypykatz || sudo python3 -m pip install -q pypykatz" \
         "command -v pypykatz >/dev/null 2>&1"
 
-    install_tool "sublime-text" \
-        "wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg | gpg --no-default-keyring --keyring ./temp-keyring.gpg --import && gpg --no-default-keyring --keyring ./temp-keyring.gpg --export --output sublime-text.gpg && rm -f temp-keyring.gpg temp-keyring.gpg~ && sudo mkdir -p /usr/local/share/keyrings && sudo mv ./sublime-text.gpg /usr/local/share/keyrings && echo 'deb [signed-by=/usr/local/share/keyrings/sublime-text.gpg] https://download.sublimetext.com/ apt/stable/' | sudo tee /etc/apt/sources.list.d/sublime-text.list && sudo apt-get update -qq && sudo apt-get install -qq -y sublime-text" \
+    tool "sublime-text" \
+        "wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg | gpg --no-default-keyring --keyring ./temp-keyring.gpg --import && gpg --no-default-keyring --keyring ./temp-keyring.gpg --export --output sublime-text.gpg && rm -f temp-keyring.gpg temp-keyring.gpg~ && sudo mkdir -p /usr/local/share/keyrings && sudo mv ./sublime-text.gpg /usr/local/share/keyrings && echo 'deb [signed-by=/usr/local/share/keyrings/sublime-text.gpg] https://download.sublimetext.com/ apt/stable/' | sudo tee /etc/apt/sources.list.d/sublime-text.list && $APT_GET update -qq && $APT_GET install -qq -y sublime-text" \
         "command -v subl >/dev/null 2>&1"
 
-    install_tool "docker" \
-        "sudo apt-get -qq -y install docker.io" \
+    tool "docker" \
+        "$APT_GET -qq -y install docker.io" \
         "command -v docker >/dev/null 2>&1"
 
-    install_tool "docker-compose" \
-        "sudo apt-get -qq -y install docker-compose" \
+    tool "docker-compose" \
+        "$APT_GET -qq -y install docker-compose" \
         "command -v docker-compose >/dev/null 2>&1"
 
-    install_tool "bloodhound-CE" \
+    tool "bloodhound-CE" \
         "curl -fsSL https://ghst.ly/getbhce -o /opt/bloodhoundCE/docker-compose.yml" \
         "[[ -f /opt/bloodhoundCE/docker-compose.yml ]]" \
         "sudo mkdir -p /opt/bloodhoundCE"
 
+    # --- Active Directory / network tooling (apt on Kali, pip/gem fallback) ---
+    tool "netexec" \
+        "$APT_GET -qq -y install netexec || sudo python3 -m pip install -q --break-system-packages netexec || sudo python3 -m pip install -q netexec" \
+        "command -v netexec >/dev/null 2>&1 || command -v nxc >/dev/null 2>&1"
+
+    tool "impacket" \
+        "$APT_GET -qq -y install impacket-scripts || sudo python3 -m pip install -q --break-system-packages impacket || sudo python3 -m pip install -q impacket" \
+        "command -v impacket-secretsdump >/dev/null 2>&1 || command -v secretsdump.py >/dev/null 2>&1"
+
+    tool "responder" \
+        "$APT_GET -qq -y install responder" \
+        "command -v responder >/dev/null 2>&1"
+
+    tool "mitm6" \
+        "$APT_GET -qq -y install mitm6 || sudo python3 -m pip install -q --break-system-packages mitm6 || sudo python3 -m pip install -q mitm6" \
+        "command -v mitm6 >/dev/null 2>&1"
+
+    tool "evil-winrm" \
+        "$APT_GET -qq -y install evil-winrm || sudo gem install evil-winrm" \
+        "command -v evil-winrm >/dev/null 2>&1"
+
+    tool "enum4linux-ng" \
+        "$APT_GET -qq -y install enum4linux-ng || sudo python3 -m pip install -q --break-system-packages enum4linux-ng || sudo python3 -m pip install -q enum4linux-ng" \
+        "command -v enum4linux-ng >/dev/null 2>&1"
+
+    tool "ldapdomaindump" \
+        "$APT_GET -qq -y install ldapdomaindump || sudo python3 -m pip install -q --break-system-packages ldapdomaindump || sudo python3 -m pip install -q ldapdomaindump" \
+        "command -v ldapdomaindump >/dev/null 2>&1"
+
+    tool "smbmap" \
+        "$APT_GET -qq -y install smbmap || sudo python3 -m pip install -q --break-system-packages smbmap || sudo python3 -m pip install -q smbmap" \
+        "command -v smbmap >/dev/null 2>&1"
+
+    # --- Recon / pivoting -----------------------------------------------------
+    tool "pipx" \
+        "$APT_GET -qq -y install pipx || sudo python3 -m pip install -q --break-system-packages pipx" \
+        "command -v pipx >/dev/null 2>&1"
+
+    tool "fzf" \
+        "install_fzf" \
+        "[[ -x \"${user_home}/.fzf/bin/fzf\" ]] || command -v fzf >/dev/null 2>&1"
+
+    tool "bat" \
+        "$APT_GET -qq -y install bat" \
+        "command -v batcat >/dev/null 2>&1 || command -v bat >/dev/null 2>&1"
+
+    tool "masscan" \
+        "$APT_GET -qq -y install masscan" \
+        "command -v masscan >/dev/null 2>&1"
+
+    tool "nuclei" \
+        "$APT_GET -qq -y install nuclei" \
+        "command -v nuclei >/dev/null 2>&1"
+
+    tool "httpx" \
+        "$APT_GET -qq -y install httpx-toolkit || $APT_GET -qq -y install httpx" \
+        "command -v httpx >/dev/null 2>&1"
+
+    tool "subfinder" \
+        "$APT_GET -qq -y install subfinder" \
+        "command -v subfinder >/dev/null 2>&1"
+
+    tool "coercer" \
+        "$APT_GET -qq -y install coercer || sudo python3 -m pip install -q --break-system-packages coercer || sudo python3 -m pip install -q coercer" \
+        "command -v coercer >/dev/null 2>&1"
+
+    tool "bloodyAD" \
+        "$APT_GET -qq -y install bloodyad || sudo python3 -m pip install -q --break-system-packages bloodyAD || sudo python3 -m pip install -q bloodyAD" \
+        "command -v bloodyAD >/dev/null 2>&1"
+
+    tool "ligolo-ng" \
+        "$APT_GET -qq -y install ligolo-ng || { lg_url=\$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/nicocha30/ligolo-ng/releases/latest | grep -o 'https://[^\"]*proxy[^\"]*linux_amd64.tar.gz' | head -1); [ -n \"\$lg_url\" ] && curl -fsSL --max-time 120 \"\$lg_url\" -o /tmp/ligolo.tgz && sudo tar -xzf /tmp/ligolo.tgz -C /usr/local/bin proxy && sudo mv -f /usr/local/bin/proxy /usr/local/bin/ligolo-proxy && rm -f /tmp/ligolo.tgz; }" \
+        "command -v ligolo-proxy >/dev/null 2>&1 || command -v ligolo-ng >/dev/null 2>&1"
+}
+
+install_tools() {
+    [[ ${#T_NAME[@]} -eq 0 ]] && define_tools
+
+    if [[ "$DRY_RUN" -ne 1 && $UID -ne 0 ]]; then
+        warn "Installing tools requires elevated privileges."
+        sudo -v || { err "sudo authentication failed."; return 1; }
+    fi
+
+    local i name
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        section "Installing tools (dry run)"
+        local want=0 have=0
+        for i in "${!T_NAME[@]}"; do
+            name="${T_NAME[i]}"
+            [[ -n "$ONLY_LIST" ]] && ! in_csv "$name" "$ONLY_LIST" && continue
+            [[ -n "$SKIP_LIST" ]] && in_csv "$name" "$SKIP_LIST" && { skip_line "$name" "skipped"; continue; }
+            if eval "${T_CHK[i]}" >/dev/null 2>&1; then
+                skip_line "$name" "present"; have=$((have + 1))
+            else
+                dry_line "$name" "would install"; want=$((want + 1))
+            fi
+        done
+        rule
+        info "${want} would be installed, ${have} already present"
+        return
+    fi
+
+    reset_stats
+    section "Installing tools"
+    for i in "${!T_NAME[@]}"; do
+        name="${T_NAME[i]}"
+        [[ -n "$ONLY_LIST" ]] && ! in_csv "$name" "$ONLY_LIST" && continue
+        [[ -n "$SKIP_LIST" ]] && in_csv "$name" "$SKIP_LIST" && { skip_line "$name" "skipped"; continue; }
+        install_tool "$name" "${T_INST[i]}" "${T_CHK[i]}" "${T_PRE[i]}"
+    done
     summary
 }
 
 ###############################################################################
 # Phase: download scripts
 ###############################################################################
-download_scripts() {
-    toolsdir="/opt/tools"
-
-    info "Choose a directory to download scripts into (Tab completion enabled)."
-    toolsdir="$(read_directory "$(printf '  %s%s%s  Directory [%s%s%s]: ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$toolsdir" "$C_RESET")" "$toolsdir")"
-
-    if [[ -d "$toolsdir" ]]; then
-        info "Using directory: ${C_BOLD}${toolsdir}${C_RESET}"
+# choose_dir <default> - set global `toolsdir`, prompting only when interactive.
+# Honours --dir (PRESET_DIR) and -y (ASSUME_YES), and falls back to the default
+# when stdin is not a terminal (e.g. piped) so it never blocks.
+choose_dir() {
+    local default="$1"
+    if [[ -n "$PRESET_DIR" ]]; then
+        toolsdir="$PRESET_DIR"
+    elif [[ "$ASSUME_YES" -eq 1 || ! -t 0 ]]; then
+        toolsdir="$default"
     else
-        if mkdir -p "$toolsdir" >/dev/null 2>&1; then
-            info "Created directory: ${C_BOLD}${toolsdir}${C_RESET}"
-        else
-            err "No permission to create ${C_BOLD}${toolsdir}${C_RESET}. Re-run with sudo."
-            return 1
-        fi
+        info "Choose a download directory (Tab completion enabled)."
+        toolsdir="$(read_directory "$(printf '  %s%s%s  Directory [%s%s%s]: ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$default" "$C_RESET")" "$default")"
     fi
+}
 
-    cd "$toolsdir" || { err "Failed to enter ${toolsdir}"; return 1; }
+download_scripts() {
+    choose_dir "/opt/tools"
 
-    reset_stats
-    section "Downloading scripts to ${toolsdir}"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        reset_stats
+        section "Downloading scripts to ${toolsdir} (dry run)"
+    else
+        if [[ -d "$toolsdir" ]]; then
+            info "Using directory: ${C_BOLD}${toolsdir}${C_RESET}"
+        else
+            if mkdir -p "$toolsdir" >/dev/null 2>&1; then
+                info "Created directory: ${C_BOLD}${toolsdir}${C_RESET}"
+            else
+                err "No permission to create ${C_BOLD}${toolsdir}${C_RESET}. Re-run with sudo."
+                return 1
+            fi
+        fi
+
+        cd "$toolsdir" || { err "Failed to enter ${toolsdir}"; return 1; }
+
+        reset_stats
+        section "Downloading scripts to ${toolsdir}"
+    fi
 
 
 
@@ -757,7 +954,7 @@ else
 fi
 
 
-    perform_cleanup
+    [[ "$DRY_RUN" -eq 1 ]] || perform_cleanup
     summary
 }
 
@@ -765,20 +962,19 @@ fi
 # Phase: download obfuscated payloads
 ###############################################################################
 obfuscated_scripts() {
-    toolsdir="${toolsdir:-/opt/tools}"
+    choose_dir "${toolsdir:-/opt/tools}"
 
-    info "Choose a base directory; an ${C_BOLD}obfuscated${C_RESET} sub-folder will be created inside it."
-    toolsdir="$(read_directory "$(printf '  %s%s%s  Directory [%s%s%s]: ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET" "$C_BOLD" "$toolsdir" "$C_RESET")" "$toolsdir")"
-
-    if [[ ! -d "$toolsdir" ]]; then
-        mkdir -p "$toolsdir" >/dev/null 2>&1 || { err "Cannot create ${C_BOLD}${toolsdir}${C_RESET}"; return 1; }
-        info "Created directory: ${C_BOLD}${toolsdir}/obfuscated${C_RESET}"
-    else
-        info "Using directory: ${C_BOLD}${toolsdir}/obfuscated${C_RESET}"
+    if [[ "$DRY_RUN" -ne 1 ]]; then
+        if [[ ! -d "$toolsdir" ]]; then
+            mkdir -p "$toolsdir" >/dev/null 2>&1 || { err "Cannot create ${C_BOLD}${toolsdir}${C_RESET}"; return 1; }
+            info "Created directory: ${C_BOLD}${toolsdir}/obfuscated${C_RESET}"
+        else
+            info "Using directory: ${C_BOLD}${toolsdir}/obfuscated${C_RESET}"
+        fi
     fi
 
     reset_stats
-    section "Downloading obfuscated payloads"
+    section "Downloading obfuscated payloads$([[ "$DRY_RUN" -eq 1 ]] && echo ' (dry run)')"
 
 # Downloading Certify.exe._obf.exe
 download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/ObfuscatedSharpCollection/main/NetFramework_4.7_Any/Certify.exe._obf.exe" "Certify.exe._obf.exe"
@@ -839,6 +1035,16 @@ download_obfuscated_scripts "https://raw.githubusercontent.com/Flangvik/Obfuscat
 ###############################################################################
 add_custom_functions() {
     toolsdir="${toolsdir:-/opt/tools}"
+
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        section "Adding custom shell functions (dry run)"
+        dry_line "servtools"       "would add to ~/.zshrc"
+        dry_line "extract_ports"   "would add to ~/.zshrc"
+        dry_line "cat -> bat alias" "would add to shell rc"
+        dry_line "rockyou.txt"     "would extract if present"
+        return
+    fi
+
     section "Adding custom shell functions"
 
     # ----- servtools: quick HTTP server from the tools directory -------------
@@ -890,6 +1096,38 @@ add_custom_functions() {
         } >> "$zshrc_file" 2>/dev/null
         ok "extract_ports added. Reopen your terminal and run: ${C_BOLD}extract_ports <file>${C_RESET}"
     fi
+    chown_user "$zshrc_file"
+
+    # ----- bat: alias cat to bat (batcat on Debian/Kali) in the user shells --
+    local rc rc_files=("$zshrc_file")
+    [[ -f "$bashrc_file" ]] && rc_files+=("$bashrc_file")
+    for rc in "${rc_files[@]}"; do
+        if grep -q 'SecTools: bat alias' "$rc" 2>/dev/null; then
+            skip_line "cat->bat ($(basename "$rc"))" "already added"
+            continue
+        fi
+        {
+            echo ""
+            echo "# SecTools: bat alias - use bat as a nicer cat when available"
+            echo 'if command -v batcat >/dev/null 2>&1; then alias cat="batcat"'
+            echo 'elif command -v bat >/dev/null 2>&1; then alias cat="bat"; fi'
+        } >> "$rc" 2>/dev/null && chown_user "$rc" && ok "cat -> bat alias added to ${C_BOLD}$(basename "$rc")${C_RESET}"
+    done
+
+    # ----- rockyou wordlist: unzip the Kali-shipped archive if present -------
+    local rockyou_gz="/usr/share/wordlists/rockyou.txt.gz"
+    local rockyou_txt="/usr/share/wordlists/rockyou.txt"
+    if [[ -f "$rockyou_txt" ]]; then
+        skip_line "rockyou.txt" "already extracted"
+    elif [[ -f "$rockyou_gz" ]]; then
+        # SC2024: the log redirect is applied by our shell, not the sudo'd
+        # gunzip; that is intended - $LOGFILE lives in the launch dir, not a
+        # root-only path - so the redirect works whether or not we are root.
+        # shellcheck disable=SC2024
+        (sudo gunzip -f "$rockyou_gz" >>"$LOGFILE" 2>&1) & spinner "rockyou.txt" "extracting" "extracted"
+    else
+        skip_line "rockyou.txt" "not found"
+    fi
 }
 
 ###############################################################################
@@ -930,21 +1168,138 @@ menu_choice() {
 }
 
 ###############################################################################
+# Usage / help
+###############################################################################
+disable_color() {
+    USE_COLOR=0; SPIN_ANIMATE=0
+    C_RESET=''; C_BOLD=''; C_DIM=''; C_RED=''; C_GREEN=''; C_YELLOW=''; C_CYAN=''; C_GREY=''
+}
+
+usage() {
+    cat <<EOF
+
+  ${C_BOLD}SecTools${C_RESET} ${C_DIM}v${SECTOOLS_VERSION}${C_RESET} - offensive tooling bootstrapper
+
+  ${C_BOLD}USAGE${C_RESET}
+    sudo ./sectools.sh [options]
+
+    With no options an interactive menu is shown.
+
+  ${C_BOLD}ACTIONS${C_RESET} (combine freely; they run in the order given)
+    --tools           Install tools
+    --scripts         Download scripts
+    --obfuscated      Download obfuscated scripts
+    --functions       Add custom shell functions to ~/.zshrc
+    --all             All of the above
+
+  ${C_BOLD}OPTIONS${C_RESET}
+    --dir PATH        Download target (default /opt/tools); skips the prompt
+    --only a,b,c      Tool phase: install only these tools
+    --skip a,b,c      Tool phase: skip these tools
+    --dry-run         Show what would happen; change nothing
+    --list            List the tool inventory and exit
+    --update          Run 'apt update' before the actions
+    --upgrade         Run 'apt upgrade' before the actions
+    -y, --yes         Non-interactive: assume defaults and run 'apt update'
+    --no-color        Disable colours and the spinner animation
+    -h, --help        Show this help and exit
+    -V, --version     Show version and exit
+
+  ${C_BOLD}EXAMPLES${C_RESET}
+    sudo ./sectools.sh --all -y
+    sudo ./sectools.sh --tools --only netexec,impacket,bloodhound
+    sudo ./sectools.sh --tools --skip docker,docker-compose
+    sudo ./sectools.sh --all --dry-run
+    sudo ./sectools.sh --scripts --dir /opt/tools -y
+
+EOF
+}
+
+# list_inventory - print the tool registry and exit (no network, no install)
+list_inventory() {
+    [[ ${#T_NAME[@]} -eq 0 ]] && define_tools
+    printf '\n  %s%s%s %s%s%s\n' "$C_CYAN" "$GLYPH_ARROW" "$C_RESET" "$C_BOLD" "Tools (${#T_NAME[@]})" "$C_RESET"
+    rule
+    local i
+    for i in "${!T_NAME[@]}"; do
+        printf '    %s%s%s %s\n' "$C_CYAN" "$GLYPH_SKIP" "$C_RESET" "${T_NAME[i]}"
+    done
+    rule
+    info "Filter with ${C_BOLD}--only${C_RESET} / ${C_BOLD}--skip${C_RESET}; preview with ${C_BOLD}--dry-run${C_RESET}."
+    info "Scripts and obfuscated payloads are fetched by ${C_BOLD}--scripts${C_RESET} / ${C_BOLD}--obfuscated${C_RESET}."
+    echo
+}
+
+###############################################################################
 # Main
 ###############################################################################
 main() {
+    local actions=() do_list=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tools)       actions+=(tools) ;;
+            --scripts)     actions+=(scripts) ;;
+            --obfuscated)  actions+=(obfuscated) ;;
+            --functions)   actions+=(functions) ;;
+            --all)         actions+=(tools scripts obfuscated functions) ;;
+            --dir)         shift; PRESET_DIR="${1:-}"; [[ -z "$PRESET_DIR" ]] && { err "--dir requires a path"; exit 2; } ;;
+            --dir=*)       PRESET_DIR="${1#*=}" ;;
+            --only)        shift; ONLY_LIST="${1:-}"; [[ -z "$ONLY_LIST" ]] && { err "--only requires a comma-separated list"; exit 2; } ;;
+            --only=*)      ONLY_LIST="${1#*=}" ;;
+            --skip)        shift; SKIP_LIST="${1:-}"; [[ -z "$SKIP_LIST" ]] && { err "--skip requires a comma-separated list"; exit 2; } ;;
+            --skip=*)      SKIP_LIST="${1#*=}" ;;
+            --dry-run)     DRY_RUN=1 ;;
+            --list)        do_list=1 ;;
+            --update)      DO_UPDATE=1 ;;
+            --upgrade)     DO_UPGRADE=1 ;;
+            -y|--yes)      ASSUME_YES=1; DO_UPDATE=1 ;;
+            --no-color)    disable_color ;;
+            -h|--help)     usage; exit 0 ;;
+            -V|--version)  echo "sectools ${SECTOOLS_VERSION}"; exit 0 ;;
+            --)            shift; break ;;
+            *)             err "Unknown option: $1"; usage; exit 2 ;;
+        esac
+        shift
+    done
+
+    if [[ "$do_list" -eq 1 ]]; then
+        list_inventory
+        exit 0
+    fi
+
     print_banner
 
-    if ! check_network; then
+    # A dry run makes no changes, so it needs neither network nor privileges;
+    # still verify connectivity for real runs.
+    if [[ "$DRY_RUN" -ne 1 ]] && ! check_network; then
         err "No network connection. Exiting."
         exit 1
     fi
 
-    require_dependencies
+    [[ "$DRY_RUN" -eq 1 ]] || require_dependencies
 
-    ask_update
-    ask_upgrade
-    menu_choice
+    if [[ ${#actions[@]} -gt 0 ]]; then
+        # Non-interactive run driven by flags.
+        [[ "$DRY_RUN" -ne 1 && "$DO_UPDATE"  -eq 1 ]] && run_update
+        [[ "$DRY_RUN" -ne 1 && "$DO_UPGRADE" -eq 1 ]] && run_upgrade
+        local a
+        for a in "${actions[@]}"; do
+            case "$a" in
+                tools)      install_tools ;;
+                scripts)    download_scripts ;;
+                obfuscated) obfuscated_scripts ;;
+                functions)  add_custom_functions ;;
+            esac
+        done
+    elif [[ ! -t 0 ]]; then
+        err "No TTY for the interactive menu. Pass an action such as --all (see --help)."
+        exit 2
+    else
+        ask_update
+        ask_upgrade
+        menu_choice
+    fi
 
     printf '\n  %s%s Done.%s\n\n' "$C_GREEN" "$GLYPH_OK" "$C_RESET"
 }

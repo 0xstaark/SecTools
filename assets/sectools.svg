@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="200" viewBox="0 0 880 200" role="img" aria-label="SecTools - offensive-security tooling bootstrapper">
+  <rect x="1" y="1" width="878" height="198" rx="18" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+
+  <!-- terminal window mark -->
+  <rect x="48" y="52" width="96" height="96" rx="16" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+  <circle cx="72" cy="76" r="5" fill="#ff5f56"/>
+  <circle cx="90" cy="76" r="5" fill="#ffbd2e"/>
+  <circle cx="108" cy="76" r="5" fill="#27c93f"/>
+  <text x="66" y="128" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="34" font-weight="700" fill="#38bec9">&gt;</text>
+  <rect x="96" y="106" width="18" height="24" rx="2" fill="#7ee787"/>
+
+  <!-- wordmark -->
+  <text x="184" y="106" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="62" font-weight="800" letter-spacing="0.5">
+    <tspan fill="#38bec9">Sec</tspan><tspan fill="#e6edf3">Tools</tspan>
+  </text>
+
+  <!-- tagline -->
+  <text x="186" y="146" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="21" font-weight="400" fill="#8b949e">Offensive-security tooling bootstrapper</text>
+
+  <!-- command hint -->
+  <text x="186" y="176" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" fill="#586069">$ sudo ./sectools.sh --all</text>
+</svg>
