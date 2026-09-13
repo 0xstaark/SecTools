@@ -535,14 +535,6 @@ define_tools() {
         "$APT_GET -qq -y install ffuf" \
         "command -v ffuf >/dev/null 2>&1"
 
-    tool "bloodhound" \
-        "$APT_GET -qq -y install bloodhound" \
-        "command -v bloodhound >/dev/null 2>&1"
-
-    tool "neo4j" \
-        "$APT_GET -qq -y install neo4j" \
-        "command -v neo4j >/dev/null 2>&1"
-
     tool "gobuster" \
         "$APT_GET -qq -y install gobuster" \
         "command -v gobuster >/dev/null 2>&1"
