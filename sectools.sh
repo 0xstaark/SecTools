@@ -1120,6 +1120,10 @@ add_custom_functions() {
     if [[ -f "$rockyou_txt" ]]; then
         skip_line "rockyou.txt" "already extracted"
     elif [[ -f "$rockyou_gz" ]]; then
+        # SC2024: the log redirect is applied by our shell, not the sudo'd
+        # gunzip; that is intended - $LOGFILE lives in the launch dir, not a
+        # root-only path - so the redirect works whether or not we are root.
+        # shellcheck disable=SC2024
         (sudo gunzip -f "$rockyou_gz" >>"$LOGFILE" 2>&1) & spinner "rockyou.txt" "extracting" "extracted"
     else
         skip_line "rockyou.txt" "not found"
