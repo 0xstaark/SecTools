@@ -1032,6 +1032,7 @@ add_custom_functions() {
         section "Adding custom shell functions (dry run)"
         dry_line "servtools"       "would add to ~/.zshrc"
         dry_line "extract_ports"   "would add to ~/.zshrc"
+        dry_line "bloodhound-ce"   "would add to ~/.zshrc"
         dry_line "cat -> bat alias" "would add to shell rc"
         dry_line "rockyou.txt"     "would extract if present"
         return
@@ -1087,6 +1088,41 @@ add_custom_functions() {
             echo "}"
         } >> "$zshrc_file" 2>/dev/null
         ok "extract_ports added. Reopen your terminal and run: ${C_BOLD}extract_ports <file>${C_RESET}"
+    fi
+
+    # ----- bloodhound-ce: spin BloodHound CE up/down without the compose line -
+    if grep -q 'bloodhound-ce()' "$zshrc_file" 2>/dev/null; then
+        skip_line "bloodhound-ce" "already added"
+    else
+        cat >> "$zshrc_file" 2>/dev/null <<'BHCE'
+
+# Manage BloodHound Community Edition without the long docker compose command.
+# Usage: bloodhound-ce [up|down|logs|pull|status]   (default: up)
+bloodhound-ce() {
+    local compose="/opt/bloodhoundCE/docker-compose.yml"
+    if [[ ! -f "$compose" ]]; then
+        echo "BloodHound CE not installed ($compose missing). Run sectools.sh --tools first."
+        return 1
+    fi
+    local dc; if docker compose version >/dev/null 2>&1; then dc="docker compose"; else dc="docker-compose"; fi
+    local sudo=""; docker info >/dev/null 2>&1 || sudo="sudo"
+    case "${1:-up}" in
+        up|start)
+            echo "[*] Starting BloodHound CE ..."
+            $sudo $dc -f "$compose" up -d || return 1
+            echo "[+] BloodHound CE: http://localhost:8080  (login: admin)"
+            echo "[*] First run only - reveal the initial password with:"
+            echo "    bloodhound-ce logs | grep -i 'Initial Password'"
+            ;;
+        down|stop)   $sudo $dc -f "$compose" down ;;
+        logs)        $sudo $dc -f "$compose" logs -f ;;
+        pull|update) $sudo $dc -f "$compose" pull ;;
+        status|ps)   $sudo $dc -f "$compose" ps ;;
+        *)           echo "Usage: bloodhound-ce [up|down|logs|pull|status]" ;;
+    esac
+}
+BHCE
+        ok "bloodhound-ce added. Reopen your terminal and run: ${C_BOLD}bloodhound-ce${C_RESET}"
     fi
     chown_user "$zshrc_file"
 

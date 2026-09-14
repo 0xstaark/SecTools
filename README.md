@@ -105,6 +105,9 @@ set, saved to an `obfuscated/` sub-folder.
 
 - `servtools <port> [--obf]` &mdash; HTTP server from the tools directory
 - `extract_ports <file>` &mdash; comma-separated port list from tool output
+- `bloodhound-ce [up|down|logs|pull|status]` &mdash; start/stop BloodHound CE
+  without the full `docker compose` command (default `up` &rarr;
+  http://localhost:8080)
 - `cat` aliased to `bat`/`batcat` when installed
 - `rockyou.txt.gz` unzipped in place if present
 </details>
