@@ -36,8 +36,8 @@ Requires a Debian-based distribution (built for **Kali**). `curl`, `wget`,
 
 ## Usage
 
-Run with no arguments for an interactive menu, or drive it non-interactively
-with flags:
+Run with no arguments for an interactive menu (which accepts several choices at
+once, e.g. `1 3 5` or `1,4`), or drive it non-interactively with flags:
 
 ```bash
 sudo ./sectools.sh --all -y                       # everything, unattended
@@ -78,9 +78,10 @@ BloodHound is installed as **Community Edition** (`bloodhound-CE`), which brings
 its own neo4j in its Docker stack &mdash; no standalone neo4j is installed.
 
 `fzf` and `bat` are installed for the invoking user (not root); `bat` is aliased
-to `cat` in `~/.zshrc` and `~/.bashrc`. `nuclei` is pulled from ProjectDiscovery's
-latest GitHub release (the apt build lags); an older, apt-installed copy is
-replaced.
+to `cat` in `~/.zshrc` and `~/.bashrc`. The ProjectDiscovery tools (`nuclei`,
+`httpx`, `subfinder`) are pulled from their latest GitHub release rather than the
+lagging apt build, and an older installed copy is replaced &mdash; so re-running
+the tools phase also updates them.
 </details>
 
 <details>
