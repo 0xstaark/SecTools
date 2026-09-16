@@ -78,7 +78,9 @@ BloodHound is installed as **Community Edition** (`bloodhound-CE`), which brings
 its own neo4j in its Docker stack &mdash; no standalone neo4j is installed.
 
 `fzf` and `bat` are installed for the invoking user (not root); `bat` is aliased
-to `cat` in `~/.zshrc` and `~/.bashrc`.
+to `cat` in `~/.zshrc` and `~/.bashrc`. `nuclei` is pulled from ProjectDiscovery's
+latest GitHub release (the apt build lags); an older, apt-installed copy is
+replaced.
 </details>
 
 <details>
