@@ -505,54 +505,61 @@ install_fzf() {
 }
 
 ###############################################################################
-# nuclei - always track the latest ProjectDiscovery release (the apt build lags)
+# ProjectDiscovery Go tools (nuclei, httpx, subfinder) - track the latest
+# upstream release, because the distro packages lag noticeably.
+#
+#   pd_is_latest    <binary> <owner/repo>   (check-command)
+#   install_pd_tool <binary> <owner/repo>   (install-command)
 ###############################################################################
-NUCLEI_API="https://api.github.com/repos/projectdiscovery/nuclei/releases/latest"
 
-# Highest semver of the installed nuclei, or empty if not installed.
-_nuclei_installed_version() {
-    command -v nuclei >/dev/null 2>&1 || return 0
-    nuclei -version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+# Highest semver reported by an installed binary, or empty if not installed.
+_pd_installed_version() {
+    command -v "$1" >/dev/null 2>&1 || return 0
+    "$1" -version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
 }
 
-# Latest semver published by ProjectDiscovery, or empty if it can't be fetched.
-_nuclei_latest_version() {
-    curl -fsSL --connect-timeout 10 --max-time 30 "$NUCLEI_API" 2>/dev/null \
+# Latest semver published for owner/repo, or empty if it can't be fetched.
+_pd_latest_version() {
+    curl -fsSL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
         | grep -oE '"tag_name":[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+"' \
         | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
 }
 
-# Check-command: true when nuclei is present AND not older than the latest
-# release, so install_tool only (re)installs when it is missing or outdated.
-nuclei_is_latest() {
+# Check-command: true when <binary> is present AND not older than the latest
+# release of <owner/repo>, so install_tool only (re)installs when it is missing
+# or outdated. A newer/dev build is left alone; an unreachable API is treated as
+# "current" so a working install is never churned.
+pd_is_latest() {
     local cur latest newest
-    cur="$(_nuclei_installed_version)"
+    cur="$(_pd_installed_version "$1")"
     [[ -n "$cur" ]] || return 1
-    latest="$(_nuclei_latest_version)"
-    [[ -n "$latest" ]] || return 0          # API unreachable: don't churn a working install
+    latest="$(_pd_latest_version "$2")"
+    [[ -n "$latest" ]] || return 0
     newest="$(printf '%s\n%s\n' "$cur" "$latest" | sort -V | tail -1)"
-    [[ "$newest" == "$cur" ]]               # up-to-date when current is the newest
+    [[ "$newest" == "$cur" ]]
 }
 
-# Install the latest release binary to /usr/local/bin, replacing an older,
-# apt-managed copy so there is no stale duplicate on PATH.
-install_nuclei() {
-    local url tmp
-    url="$(curl -fsSL --connect-timeout 10 --max-time 30 "$NUCLEI_API" 2>/dev/null \
-        | grep -oE 'https://[^"]*nuclei_[^"]*linux_amd64\.zip' | head -1)"
-    [[ -n "$url" ]] || { echo "could not resolve latest nuclei linux_amd64 asset"; return 1; }
+# Install the latest linux_amd64 release of <binary> from <owner/repo> into
+# /usr/local/bin, first removing whatever distro package currently owns the
+# binary on PATH so no stale duplicate shadows it.
+install_pd_tool() {
+    local bin="$1" repo="$2" url tmp cur_bin owner
+    url="$(curl -fsSL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null \
+        | grep -oE "https://[^\"]*${bin}_[^\"]*linux_amd64\\.zip" | head -1)"
+    [[ -n "$url" ]] || { echo "could not resolve latest ${bin} linux_amd64 asset"; return 1; }
 
-    # Drop an older distro package first so it doesn't shadow the new binary.
-    if dpkg -s nuclei >/dev/null 2>&1; then
-        sudo apt-get -qq -y remove nuclei >/dev/null 2>&1 || true
+    cur_bin="$(command -v "$bin" 2>/dev/null || true)"
+    if [[ -n "$cur_bin" ]]; then
+        owner="$(dpkg -S "$cur_bin" 2>/dev/null | cut -d: -f1)"
+        [[ -n "$owner" ]] && sudo apt-get -qq -y remove "$owner" >/dev/null 2>&1 || true
     fi
 
     tmp="$(mktemp -d)"
-    curl -fsSL --max-time 120 "$url" -o "$tmp/nuclei.zip" || { rm -rf "$tmp"; return 1; }
-    unzip -o "$tmp/nuclei.zip" -d "$tmp" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
-    sudo install -m 0755 "$tmp/nuclei" /usr/local/bin/nuclei || { rm -rf "$tmp"; return 1; }
+    curl -fsSL --max-time 120 "$url" -o "$tmp/${bin}.zip" || { rm -rf "$tmp"; return 1; }
+    unzip -o "$tmp/${bin}.zip" -d "$tmp" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
+    sudo install -m 0755 "$tmp/$bin" "/usr/local/bin/$bin" || { rm -rf "$tmp"; return 1; }
     rm -rf "$tmp"
-    hash -r 2>/dev/null || true             # forget any cached path to the old binary
+    hash -r 2>/dev/null || true
 }
 
 ###############################################################################
@@ -670,16 +677,16 @@ define_tools() {
         "command -v masscan >/dev/null 2>&1"
 
     tool "nuclei" \
-        "install_nuclei" \
-        "nuclei_is_latest"
+        "install_pd_tool nuclei projectdiscovery/nuclei" \
+        "pd_is_latest nuclei projectdiscovery/nuclei"
 
     tool "httpx" \
-        "$APT_GET -qq -y install httpx-toolkit || $APT_GET -qq -y install httpx" \
-        "command -v httpx >/dev/null 2>&1"
+        "install_pd_tool httpx projectdiscovery/httpx" \
+        "pd_is_latest httpx projectdiscovery/httpx"
 
     tool "subfinder" \
-        "$APT_GET -qq -y install subfinder" \
-        "command -v subfinder >/dev/null 2>&1"
+        "install_pd_tool subfinder projectdiscovery/subfinder" \
+        "pd_is_latest subfinder projectdiscovery/subfinder"
 
     tool "coercer" \
         "$APT_GET -qq -y install coercer || sudo python3 -m pip install -q --break-system-packages coercer || sudo python3 -m pip install -q coercer" \
@@ -1220,30 +1227,50 @@ menu_choice() {
     printf '    %s4%s  Add custom shell functions\n' "$C_CYAN" "$C_RESET"
     printf '    %s5%s  All of the above\n'           "$C_CYAN" "$C_RESET"
     printf '    %s0%s  Exit\n'                       "$C_CYAN" "$C_RESET"
+    printf '  %s%s%s\n' "$C_DIM" "Select one or more, e.g. 1 3 5 or 1,4" "$C_RESET"
 
     local choice
-    read -r -p "$(printf '\n  %s%s%s  Enter choice [0-5]: ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET")" choice
+    read -r -p "$(printf '\n  %s%s%s  Enter choice(s) [0-5]: ' "$C_CYAN" "$GLYPH_INFO" "$C_RESET")" choice
 
-    case "$choice" in
-        1) install_tools ;;
-        2) download_scripts ;;
-        3) obfuscated_scripts ;;
-        4) add_custom_functions ;;
-        5)
-            install_tools
-            download_scripts
-            obfuscated_scripts
-            add_custom_functions
-            ;;
-        0)
-            info "Exiting."
-            exit 0
-            ;;
-        *)
-            warn "Invalid option. Choose a number between 0 and 5."
-            menu_choice
-            ;;
-    esac
+    # Accept several selections at once (space- or comma-separated).
+    local -a tokens picks=()
+    read -ra tokens <<< "${choice//,/ }"
+
+    local t
+    for t in "${tokens[@]}"; do
+        case "$t" in
+            0) info "Exiting."; exit 0 ;;
+            5) picks=(tools scripts obfuscated functions); break ;;
+            1) picks+=(tools) ;;
+            2) picks+=(scripts) ;;
+            3) picks+=(obfuscated) ;;
+            4) picks+=(functions) ;;
+            *) warn "Ignoring invalid option: ${t}" ;;
+        esac
+    done
+
+    if [[ ${#picks[@]} -eq 0 ]]; then
+        warn "No valid option selected. Choose one or more numbers between 0 and 5."
+        menu_choice
+        return
+    fi
+
+    # De-duplicate while preserving the order given.
+    local p seen=" " ordered=()
+    for p in "${picks[@]}"; do
+        [[ "$seen" == *" $p "* ]] && continue
+        seen+="$p "
+        ordered+=("$p")
+    done
+
+    for p in "${ordered[@]}"; do
+        case "$p" in
+            tools)      install_tools ;;
+            scripts)    download_scripts ;;
+            obfuscated) obfuscated_scripts ;;
+            functions)  add_custom_functions ;;
+        esac
+    done
 }
 
 ###############################################################################
