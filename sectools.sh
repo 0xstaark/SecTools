@@ -505,6 +505,57 @@ install_fzf() {
 }
 
 ###############################################################################
+# nuclei - always track the latest ProjectDiscovery release (the apt build lags)
+###############################################################################
+NUCLEI_API="https://api.github.com/repos/projectdiscovery/nuclei/releases/latest"
+
+# Highest semver of the installed nuclei, or empty if not installed.
+_nuclei_installed_version() {
+    command -v nuclei >/dev/null 2>&1 || return 0
+    nuclei -version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+
+# Latest semver published by ProjectDiscovery, or empty if it can't be fetched.
+_nuclei_latest_version() {
+    curl -fsSL --connect-timeout 10 --max-time 30 "$NUCLEI_API" 2>/dev/null \
+        | grep -oE '"tag_name":[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+"' \
+        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+
+# Check-command: true when nuclei is present AND not older than the latest
+# release, so install_tool only (re)installs when it is missing or outdated.
+nuclei_is_latest() {
+    local cur latest newest
+    cur="$(_nuclei_installed_version)"
+    [[ -n "$cur" ]] || return 1
+    latest="$(_nuclei_latest_version)"
+    [[ -n "$latest" ]] || return 0          # API unreachable: don't churn a working install
+    newest="$(printf '%s\n%s\n' "$cur" "$latest" | sort -V | tail -1)"
+    [[ "$newest" == "$cur" ]]               # up-to-date when current is the newest
+}
+
+# Install the latest release binary to /usr/local/bin, replacing an older,
+# apt-managed copy so there is no stale duplicate on PATH.
+install_nuclei() {
+    local url tmp
+    url="$(curl -fsSL --connect-timeout 10 --max-time 30 "$NUCLEI_API" 2>/dev/null \
+        | grep -oE 'https://[^"]*nuclei_[^"]*linux_amd64\.zip' | head -1)"
+    [[ -n "$url" ]] || { echo "could not resolve latest nuclei linux_amd64 asset"; return 1; }
+
+    # Drop an older distro package first so it doesn't shadow the new binary.
+    if dpkg -s nuclei >/dev/null 2>&1; then
+        sudo apt-get -qq -y remove nuclei >/dev/null 2>&1 || true
+    fi
+
+    tmp="$(mktemp -d)"
+    curl -fsSL --max-time 120 "$url" -o "$tmp/nuclei.zip" || { rm -rf "$tmp"; return 1; }
+    unzip -o "$tmp/nuclei.zip" -d "$tmp" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
+    sudo install -m 0755 "$tmp/nuclei" /usr/local/bin/nuclei || { rm -rf "$tmp"; return 1; }
+    rm -rf "$tmp"
+    hash -r 2>/dev/null || true             # forget any cached path to the old binary
+}
+
+###############################################################################
 # Phase: install tools
 ###############################################################################
 # -----------------------------------------------------------------------------
@@ -619,8 +670,8 @@ define_tools() {
         "command -v masscan >/dev/null 2>&1"
 
     tool "nuclei" \
-        "$APT_GET -qq -y install nuclei" \
-        "command -v nuclei >/dev/null 2>&1"
+        "install_nuclei" \
+        "nuclei_is_latest"
 
     tool "httpx" \
         "$APT_GET -qq -y install httpx-toolkit || $APT_GET -qq -y install httpx" \
